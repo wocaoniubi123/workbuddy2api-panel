@@ -1459,7 +1459,8 @@ const els = {};
 const ctx = {
   Date, Math, Number, String, isFinite,
   PK_DAY_MS: 86400000,
-  $: id => (els[id] = els[id] || { innerHTML: '', textContent: '', addEventListener: () => {} }),
+  $: id => (els[id] = els[id] || { innerHTML: '', textContent: '', addEventListener: () => {},
+       querySelector: () => null, querySelectorAll: () => [] }),
   esc: s => String(s == null ? '' : s),
   fmtTok: v => String(v == null ? 0 : v),
   pkExpiryDateTime: ms => new Date(ms).toISOString(),   // 只取前 10 位，时区口径由真函数负责
@@ -1473,22 +1474,26 @@ ctx.renderExpirySnapshot({ accounts: [
   { uid: 'cccccccc-3', nickname: '长期包', credits_earliest_expiry: null,   credits_earliest_remaining: 0 },
   { uid: 'dddddddd-4', nickname: '零批次', credits_earliest_expiry: day(5), credits_earliest_remaining: 0 },
 ]});
-const html = els['expBody'].innerHTML;
-const cells = h => h.split('<tr>').slice(1).map(r =>
-  [...r.matchAll(/<td[^>]*>([^<]*)<\/td>/g)].map(m => m[1]));
-const rows = cells(html);
+const html = els['expList'].innerHTML;
+// 摘要在 .exp-sumline 里（纯文本断言），逐号明细在 .exp-pop 里（顺序断言）。
+const sumText = ((html.match(/<div class="exp-sumline">([\s\S]*?)<div class="exp-pop">/) || ['', ''])[1] || '')
+  .replace(/<span class="note">[\s\S]*?<\/span>/, '')
+  .replace(/<[^>]+>/g, '');
+const popOf = h => ((h.match(/<div class="exp-pop">([\s\S]*)$/) || ['', ''])[1] || '');
+const namesOf = h => [...popOf(h).matchAll(/<span class="exp-nm">([^<]*)<\/span>/g)].map(m => m[1]);
+const names = namesOf(html);
 const note = els['expNote'].textContent;   // 两次渲染前先取，下同
 
-// 5 个将到期账号 → 只展开最近 3 个，其余 2 个收纳成一行且默认收起。
+// 5 个将到期账号：我们的形态不收纳，全部逐号明细都在悬停层里，仍按到期升序。
 ctx.renderExpirySnapshot({ accounts: [1,2,3,4,5].map(n => ({ uid: 'u' + n, nickname: 'A' + n,
   credits_earliest_expiry: day(n), credits_earliest_remaining: 10 * n })) });
-const html2 = els['expBody'].innerHTML;
+const html2 = els['expList'].innerHTML;
 process.stdout.write(JSON.stringify({
-  rows: rows.map(c => [c[0], c[2], c[3], c[4]]),
+  names: names,
+  sum: sumText.replace(/最早到期\s*\S+（/, '最早到期 <D>（'),
   note: note,
-  head: cells(html2.split('<tr class="pk-group-summary"')[0]).map(c => [c[0], c[2]]),
-  restHidden: (html2.match(/<tr data-exp-row="rest" hidden>/g) || []).length,
-  label: (html2.match(/data-exp-rest="\d+"[^>]*>([^<]+)</) || ['', ''])[1],
+  names2: namesOf(html2),
+  rows2: (popOf(html2).match(/<div class="exp-row">/g) || []).length,
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "expsnap-*.cjs")
 	if err != nil {
@@ -1502,12 +1507,14 @@ process.stdout.write(JSON.stringify({
 	if err != nil {
 		t.Fatalf("expiry snapshot node test failed: %v\n%s", err, out)
 	}
-	// 41 分 2 天后到期 → 日均需耗 21（ceil 20.5）；499 分 20 天 → 25（ceil 24.95）。
-	// 若把 ceil 改成 floor，这里必须变成 20 / 24。
-	want := `{"rows":[["秋千易","2 天","41","21"],["秋","20 天","499","25"]],` +
-		`"note":` + strconv.Quote("2 个账号有未到期批次 · 未开启后台刷新 · 明细见「积分构成」") + `,` +
-		// 收纳：只展开最近到期的 3 个（A1/A2/A3 按到期升序），其余 2 个 hidden。
-		`"head":[["A1","明天"],["A2","2 天"],["A3","3 天"]],"restHidden":2,"label":"其余 2 个账号，展开"}`
+	// 41 分 2 天后到期 → 日均需耗 21（ceil 20.5）；699 分 20 天后到期不在 7 天窗口内，
+	// 故摘要的「最近 7 天内合计」只算 41、日均 ≥6（ceil 41/7）。若把 ceil 改成 floor，
+	// 逐号明细里的 21 会变成 20。
+	// 逐号顺序：秋千易(2 天) → 秋(20 天) → 长期包/零批次（无未来批次垫底）。
+	want := `{"names":["秋千易","秋","长期包","零批次"],` +
+		`"sum":"最早到期 <D>（2 天内到期 · 秋千易）· 最近7天内批次合计 41 分 · 到期前日均需耗 ≥6",` +
+		`"note":` + strconv.Quote("4 个账号 · 未开启后台刷新") + `,` +
+		`"names2":["A1","A2","A3","A4","A5"],"rows2":5}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("到期快照渲染不符:\n got=%s\nwant=%s", out, want)
 	}
@@ -1834,7 +1841,8 @@ const end = src.indexOf('// 收纳行展开/收起');
 if (start < 0 || end < 0) throw new Error('expiry snapshot helpers not found');
 const ctx = {
   Number, String, Array, Date, Math, JSON, PK_DAY_MS: 86400000,
-  expBody: { innerHTML: '' }, expNote: { textContent: '' },
+  expList: { innerHTML: '', textContent: '', querySelector: () => null, querySelectorAll: () => [] },
+  expNote: { textContent: '' },
   esc: s => String(s), fmtTok: n => String(n),
   pkExpiryDateTime: ms => new Date(ms).toISOString(),
 };
@@ -1858,19 +1866,20 @@ ctx.renderExpirySnapshot({
     { uid: 'a', nickname: 'A', credits_expiry_buckets: [{ date: day(3), remain: 150 }] },
   ],
 });
-const buckets = { html: ctx.expBody.innerHTML, note: ctx.expNote.textContent };
+const buckets = { html: ctx.expList.innerHTML, note: ctx.expNote.textContent };
 ctx.renderExpirySnapshot({
   accounts: [{ uid: 'c', nickname: 'C',
     credits_earliest_expiry: new Date(Date.now() + 3 * 86400000).toISOString(),
     credits_earliest_remaining: 77 }],
 });
 process.stdout.write(JSON.stringify({
-  order: buckets.html.indexOf('>A<') >= 0 && buckets.html.indexOf('>A<') < buckets.html.indexOf('>B<'),
+  // 逐号明细在悬停层里，账号名渲染成 <span class="exp-nm">A</span>
+  order: buckets.html.indexOf('>A</span>') >= 0 && buckets.html.indexOf('>A</span>') < buckets.html.indexOf('>B</span>'),
   hasRest: buckets.html.includes('随后'),
-  weekSum: buckets.html.includes('7 天内合计 420'),
+  weekSum: buckets.html.includes('7 天内合计') && buckets.html.includes('420'),
   dayLabel: buckets.html.includes('3 天'),
   note: buckets.note,
-  fallback: ctx.expBody.innerHTML.includes('77'),
+  fallback: ctx.expList.innerHTML.includes('77'),
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "expiry-snapshot-*.cjs")
 	if err != nil {
@@ -1887,7 +1896,7 @@ process.stdout.write(JSON.stringify({
 	got := strings.TrimSpace(string(out))
 	for _, want := range []string{
 		`"order":true`, `"hasRest":true`, `"weekSum":true`, `"dayLabel":true`, `"fallback":true`,
-		`每 5 分钟后台刷新`, `2 个账号有未到期批次`,
+		`每 5 分钟后台刷新`, `2 个账号`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expiry snapshot 输出缺少 %q: %s", want, got)

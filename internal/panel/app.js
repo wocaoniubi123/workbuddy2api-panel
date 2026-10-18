@@ -2956,52 +2956,81 @@ function expDayDiff(dateStr) {
 }
 
 function renderExpirySnapshot(d) {
-  const rows = [];
-  for (const a of (d && d.accounts) || []) {
-    const bs = expBucketList(a).filter(b => {
-      const days = expDayDiff(b.date);
-      return days !== null && days >= 0;
-    });
-    if (!bs.length) continue;  // 无未来批次（长期包/已清空）不入表
-    rows.push({ a, bs });
-  }
-  // 按最早到期日升序；同一天按昵称/uid 兜底，保证多次刷新顺序稳定。
-  rows.sort((x, y) => {
-    if (x.bs[0].date !== y.bs[0].date) return x.bs[0].date < y.bs[0].date ? -1 : 1;
-    const ax = String(x.a.nickname || x.a.uid || '');
-    const ay = String(y.a.nickname || y.a.uid || '');
+  // 禁用号不参与提醒：禁用=不参与选号，积分不会被网关消耗，提醒无意义。
+  const all = (d && d.accounts) || [];
+  const dis = new Set(all.filter(a => a.disabled).map(a => String(a.uid)));
+  const excluded = dis.size;
+  const list = all.filter(a => !dis.has(String(a.uid)));
+  const bucketsOf = a => expBucketList(a).filter(b => {
+    const dd = expDayDiff(b.date);
+    return dd !== null && dd >= 0;
+  });
+  // 明细按最早到期升序排列；无未来批次垫底（与全站「无日期垫底」口径一致）。
+  list.sort((x, y) => {
+    const bx = bucketsOf(x), by = bucketsOf(y);
+    const kx = bx.length ? Date.parse(bx[0].date) : Infinity;
+    const ky = by.length ? Date.parse(by[0].date) : Infinity;
+    if (kx !== ky) return kx > ky ? 1 : -1;
+    const ax = String(x.nickname || x.uid || '');
+    const ay = String(y.nickname || y.uid || '');
     return ax < ay ? -1 : ax > ay ? 1 : 0;
   });
-  const EXP_HEAD = 3;  // 默认只展开最近到期的 3 个账号，其余收纳成一行
-  const rowOf = ({ a, bs }, hidden) => {
+  // 危险度色阶：≤3 天红（不抓紧就真没了）、≤7 天琥珀、更远绿；色点与数字共用同一函数。
+  // 上游扣包是 FEFO（按失效时刻升序）：这些快过期批次正是被消耗得最快的，
+  // 日均需耗给的是「哪怕单靠这个账号的自然流量也能对齐」的参照。
+  const eCls = dd => dd <= 3 ? 'var(--bad)' : dd <= 7 ? 'var(--warn)' : 'var(--ok)';
+  const agg = { minDays: Infinity, minDate: '', minName: '', sumW: 0, n: 0 };
+  const rows = list.map(a => {
+    const nm = esc(a.nickname || String(a.uid || '').slice(0, 8));
+    const bs = bucketsOf(a);
+    if (!bs.length) {
+      return '<div class="exp-row"><span class="exp-dot" style="background:var(--ok)"></span>' +
+        '<span class="exp-nm">' + nm + '</span>' +
+        '<span class="exp-main">7 天内无到期积分</span></div>';
+    }
     const first = bs[0];
     const days = expDayDiff(first.date);
     const daily = Math.ceil(first.remain / Math.max(1, days));
     const week = bs.filter(b => expDayDiff(b.date) <= 7).reduce((s, b) => s + b.remain, 0);
-    const color = days <= 3 ? 'var(--bad)' : days <= 7 ? 'var(--warn)' : 'var(--ok)';
+    const cls = eCls(days);
+    const dayWord = days === 0 ? '今天到期' : days === 1 ? '明天到期' : days + ' 天内到期';
     const more = bs.length > 4 ? '　等 ' + bs.length + ' 批' : '';
     const rest = bs.slice(1, 4).map(b =>
-      '随后 ' + esc(b.date.slice(5)) + ' · ' + fmtTok(b.remain)).join('　') + more;
-    const sub = (rest ? '<div class="note">' + rest + '</div>' : '') +
-      (week > first.remain ? '<div class="note">7 天内合计 ' + fmtTok(week) + '</div>' : '');
-    return '<tr' + (hidden ? ' data-exp-row="rest" hidden' : '') + '>' +
-      '<td>' + esc(a.nickname || String(a.uid || '').slice(0, 8)) + '</td>' +
-      '<td>' + esc(first.date) + sub + '</td>' +
-      '<td class="num" style="color:' + color + '">' +
-        (days === 0 ? '今天' : days === 1 ? '明天' : days + ' 天') + '</td>' +
-      '<td class="num">' + fmtTok(first.remain) + '</td>' +
-      '<td class="num">' + fmtTok(daily) + '</td>' +
-      '</tr>';
-  };
-  // 收纳行沿用「积分构成」页的分组行样式（pk-group-summary / pk-group-toggle）。
-  const rest = rows.slice(EXP_HEAD);
-  $('expBody').innerHTML = !rows.length ? '<tr><td colspan="5">暂无未来到期批次</td></tr>'
-    : rows.slice(0, EXP_HEAD).map(r => rowOf(r, false)).join('') +
-      (rest.length ? '<tr class="pk-group-summary"><td colspan="5">' +
-        '<button type="button" class="pk-group-toggle" data-exp-rest="' + rest.length +
-        '" aria-expanded="false">其余 ' + rest.length + ' 个账号，展开</button></td></tr>' +
-        rest.map(r => rowOf(r, true)).join('') : '');
-  // 数据节奏透明化：界面 5 秒轮询，但卡片只随余额后台刷新更新（默认每 5 分钟）。
+      '随后 ' + esc(b.date.slice(5)) + ' · <span style="color:' + eCls(expDayDiff(b.date)) + '">' + fmtTok(b.remain) + '</span>').join('　') + more;
+    agg.n++; agg.sumW += week; // week = 该号 7 天内到期批次合计（可为 0）
+    if (days < agg.minDays) { agg.minDays = days; agg.minDate = first.date; agg.minName = nm; }
+    return '<div class="exp-row"><span class="exp-dot" style="background:' + cls + '"></span>' +
+      '<span class="exp-nm">' + nm + '</span>' +
+      '<span class="exp-main">最近到期 <b>' + esc(first.date) + '</b>（' + dayWord +
+      '）· 该批 <b style="color:' + cls + '">' + fmtTok(first.remain) + '</b> 积分 · 到期前日均需耗 ≥<b style="color:' + cls + '">' +
+      fmtTok(daily) + '</b>' +
+      (week > first.remain ? ' · 7 天内合计 <b style="color:' + cls + '">' + fmtTok(week) + '</b>' : '') +
+      (rest ? '<div class="note">' + rest + '</div>' : '') +
+      '</span></div>';
+  }).join('');
+  // 摘要行：最早到期（全局）+ 最近 7 天内批次合计（日均 = 合计 ÷ 7 天）。
+  let sum = '';
+  if (agg.n) {
+    const scls = eCls(agg.minDays);
+    const sword = agg.minDays === 0 ? '今天到期' : agg.minDays === 1 ? '明天到期' : agg.minDays + ' 天内到期';
+    sum = '<div class="exp-sumline"><span class="exp-dot" style="background:' + scls + '"></span>' +
+      '<span>最早到期 <b>' + esc(agg.minDate) + '</b>（' + sword + ' · ' + esc(agg.minName) + '）· 最近7天内批次合计 <b class="r">' + fmtTok(agg.sumW) + '</b> 分 · 到期前日均需耗 ≥<b class="r">' + fmtTok(Math.ceil(agg.sumW / 7)) + '</b>' +
+      '<span class="note">' + agg.n + ' 个号' + (excluded ? '（不含 ' + excluded + ' 个禁用号）' : '') + ' · 悬停看逐号明细</span></span></div>' +
+      '<div class="exp-pop">' + rows + '</div>';
+  }
+  $('expList').innerHTML = sum || rows || '<div class="empty">没有账号</div>';
+  // 账号列宽自适应：量出最长账号名实测宽度，整列统一（邮箱等长名不再折行）。
+  (function () {
+    const pop = $('expList').querySelector('.exp-pop');
+    if (!pop) return;
+    pop.style.display = 'block'; pop.style.visibility = 'hidden'; // 先挂出来量宽，同步收起无闪烁
+    const nms = pop.querySelectorAll('.exp-nm');
+    let w = 0;
+    nms.forEach(el => { w = Math.max(w, el.scrollWidth); });
+    nms.forEach(el => { el.style.flexBasis = w + 'px'; el.style.minWidth = w + 'px'; });
+    pop.style.visibility = ''; pop.style.display = '';
+  })();
+  // 数据节奏透明化：界面多处轮询，但本卡片只随余额后台刷新更新（默认每 5 分钟）。
   const iv = Number(d && d.balance_refresh_sec) || 0;
   const at = d && d.balance_refreshed_at ? new Date(d.balance_refreshed_at).getTime() : 0;
   let cadence = '未开启后台刷新';
@@ -3012,8 +3041,9 @@ function renderExpirySnapshot(d) {
       cadence += '，' + (min < 1 ? '刚刚更新' : min + ' 分钟前更新');
     }
   }
-  $('expNote').textContent = rows.length
-    ? rows.length + ' 个账号有未到期批次 · ' + cadence + ' · 明细见「积分构成」'
+  const exNote = excluded ? '（不含 ' + excluded + ' 个禁用号）' : '';
+  $('expNote').textContent = list.length
+    ? list.length + ' 个账号' + exNote + ' · ' + cadence
     : '暂无未来到期批次';
 }
 
@@ -3032,7 +3062,7 @@ function bindRestToggle(id) {
       (expanded ? '，展开' : '');
   });
 }
-bindRestToggle('expBody');
+// 到期提醒已改成「摘要行 + 悬停明细层」，不再有可展开的收纳行；官方补偿仍用收纳行。
 bindRestToggle('compBody');
 
 // 按需拉取（移植上游 8391a05）：packages 是**逐账号实时查上游**，切进本视图就打一次，
