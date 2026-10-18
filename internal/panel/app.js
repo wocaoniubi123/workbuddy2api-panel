@@ -11,6 +11,10 @@ let logPin = true, loginState = null, loginTimer = null;
 let refTimer = null;
 /* 视图级筛选状态（模块级声明放在文件顶部，避免顶层 go() 早于声明执行时踩 TDZ）。 */
 let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'default' };
+/* 收纳行（「其余 N 个账号，展开」）的展开状态。必须存在 DOM 之外：账号池/任务中心视图
+   每 5s 轮询重建 tbody，只把状态放在 aria-expanded / hidden 里会被下一轮渲染收回
+   （表现为点「展开」后什么都不点又自动收起）。键 = tbody id。 */
+const restOpen = Object.create(null);
 let mdAll = [], mdProbes = {}, mdProbeOf = () => undefined;
 let reqFilter = { q: '', outcome: '' };
 let reqEntries = [];
@@ -3151,19 +3155,30 @@ function renderExpirySnapshot(d) {
     : '暂无未来到期批次';
 }
 
+// 按 restOpen 把指定 tbody 的收纳行落到「展开/收起」状态。渲染重建 innerHTML 后必须调用一次，
+// 否则用户上一次的展开选择会丢（5s 轮询每次都会重建）。
+function applyRestToggle(body, expanded) {
+  if (!body) return;
+  const btn = body.querySelector('button[data-exp-rest]');
+  if (!btn) return;
+  body.querySelectorAll('tr[data-exp-row="rest"]').forEach(row => { row.hidden = !expanded; });
+  btn.setAttribute('aria-expanded', String(!!expanded));
+  btn.textContent = (expanded ? '收起其余 ' : '其余 ') + btn.dataset.expRest + ' 个账号' +
+    (expanded ? '' : '，展开');
+}
+
 // 收纳行展开/收起（与「积分构成」页 pkDetail 同款：查 data 行 + aria-expanded + 改按钮文案）。
-// 监听挂在 tbody 上（渲染替换 innerHTML 不会丢）；到期提醒与官方补偿共用本函数。
+// 监听挂在 tbody 上（渲染替换 innerHTML 不会丢）；官方补偿用本函数。
+// 用户选择写进 restOpen，渲染函数重建 tbody 后调 applyRestToggle 恢复。
 function bindRestToggle(id) {
   const body = $(id);
   if (!body) return;
   body.addEventListener('click', ev => {
     const btn = ev.target.closest('button[data-exp-rest]');
     if (!btn) return;
-    const expanded = btn.getAttribute('aria-expanded') === 'true';
-    btn.closest('tbody').querySelectorAll('tr[data-exp-row="rest"]').forEach(row => { row.hidden = expanded; });
-    btn.setAttribute('aria-expanded', String(!expanded));
-    btn.textContent = (expanded ? '其余 ' : '收起其余 ') + btn.dataset.expRest + ' 个账号' +
-      (expanded ? '，展开' : '');
+    const next = btn.getAttribute('aria-expanded') !== 'true';
+    restOpen[id] = next;
+    applyRestToggle(body, next);
   });
 }
 // 到期提醒已改成「摘要行 + 悬停明细层」，不再有可展开的收纳行；官方补偿仍用收纳行。
@@ -3234,6 +3249,8 @@ function renderCompensation() {
         '<button type="button" class="pk-group-toggle" data-exp-rest="' + rest.length +
         '" aria-expanded="false">其余 ' + rest.length + ' 个账号，展开</button></td></tr>' +
         rest.map(r => rowOf(r, true)).join('') : '');
+  // 重建 tbody 后恢复展开选择（本函数随 5s 轮询重渲染倒计时）。
+  applyRestToggle(body, restOpen.compBody);
   const pend = rows.filter(compPending);
   const sum = pend.reduce((n, r) => n + (r.credit || 0), 0);
   const erred = Number((compData && compData.errored) || 0);

@@ -1677,16 +1677,18 @@ const start = src.indexOf('/* ══ 官方补偿（上游 PR #196）');
 const end = src.indexOf('let lastPackages');
 if (start < 0 || end < start) throw new Error('compensation block not found');
 // 收纳行的点击处理在到期提醒那段（两个卡片共用），单独切过来一起跑。
-const tStart = src.indexOf('function bindRestToggle(id)');
+// restOpen 是模块级状态（渲染重建 tbody 后靠它恢复展开态），这里按真实作用域声明。
+const tStart = src.indexOf('// 按 restOpen 把指定 tbody 的收纳行');
 const tEnd = src.indexOf("bindRestToggle('compBody');") + "bindRestToggle('compBody');".length;
 if (tStart < 0 || tEnd < tStart) throw new Error('bindRestToggle not found');
-const toggleSrc = src.slice(tStart, tEnd);
+const toggleSrc = 'const restOpen = Object.create(null);\n' + src.slice(tStart, tEnd);
 const els = {};
 function el(id) {
   if (!els[id]) els[id] = {
-    textContent: '', innerHTML: '', hidden: false, rows: [], handlers: {},
+    textContent: '', innerHTML: '', hidden: false, rows: [], btn: null, handlers: {},
     addEventListener(ev, fn) { this.handlers[ev] = fn; },
     querySelectorAll() { return this.rows; },
+    querySelector(sel) { return sel === 'button[data-exp-rest]' ? this.btn : null; },
   };
   return els[id];
 }
@@ -1703,7 +1705,8 @@ const ctx = {
 };
 vm.createContext(ctx);
 vm.runInContext(src.slice(start, end) + '\n' + toggleSrc +
-  '\nthis.renderCompensation = renderCompensation; this.setData = (d) => { compData = d; };', ctx);
+  '\nthis.renderCompensation = renderCompensation; this.setData = (d) => { compData = d; };' +
+  ' this.applyRestToggle = applyRestToggle; this.restOpen = restOpen;', ctx);
 
 ctx.setData({ errored: 1, accounts: [
   { uid: 'bbbbbbbb-2', nickname: '已领号', active: true, claimed: true, credit: 500, end_time: '2026-10-22 23:59:59' },
@@ -1729,24 +1732,36 @@ process.stdout.write(JSON.stringify({
   pendingFirst: body.indexOf('待领号') < body.indexOf('已领号'),
   hiddenRows: (body.match(/data-exp-row="rest" hidden/g) || []).length,
   toggle: body.includes('data-exp-rest="2"') && body.includes('其余 2 个账号，展开'),
-  // 点一次收纳按钮：2 行必须真展开（展开逻辑与到期提醒共用 bindRestToggle）
+  // 点一次收纳按钮：2 行必须真展开（展开逻辑与到期提醒共用 bindRestToggle）；
+  // 再模拟一次 5s 轮询重渲染，展开态必须由 restOpen 恢复，而不是被收回。
   expandWorks: (() => {
-    const rows = [{ hidden: true }, { hidden: true }];
     const tbody = els['compBody'];
-    tbody.rows = rows;
-    const btn = {
-      dataset: { expRest: '2' }, textContent: '', attrs: {},
+    tbody.rows = [{ hidden: true }, { hidden: true }];
+    tbody.btn = {
+      dataset: { expRest: '2' }, textContent: '其余 2 个账号，展开', attrs: { 'aria-expanded': 'false' },
       getAttribute(k) { return this.attrs[k]; },
       setAttribute(k, v) { this.attrs[k] = v; },
-      closest() { return tbody; },
     };
     const click = () => tbody.handlers.click({
-      target: { closest: (sel) => (sel === 'button[data-exp-rest]' ? btn : null) },
+      target: { closest: (sel) => (sel === 'button[data-exp-rest]' ? tbody.btn : null) },
     });
     click();
-    const opened = rows.every(r => r.hidden === false) && btn.textContent === '收起其余 2 个账号';
+    const opened = tbody.rows.every(r => r.hidden === false) &&
+      tbody.btn.textContent === '收起其余 2 个账号' &&
+      tbody.btn.attrs['aria-expanded'] === 'true';
+    // 重渲染：新行/新按钮回到折叠默认态，再由 applyRestToggle 恢复。
+    tbody.rows = [{ hidden: true }, { hidden: true }];
+    tbody.btn = {
+      dataset: { expRest: '2' }, textContent: '其余 2 个账号，展开', attrs: { 'aria-expanded': 'false' },
+      getAttribute(k) { return this.attrs[k]; },
+      setAttribute(k, v) { this.attrs[k] = v; },
+    };
+    ctx.applyRestToggle(tbody, ctx.restOpen.compBody);
+    const survived = tbody.rows.every(r => r.hidden === false) &&
+      tbody.btn.textContent === '收起其余 2 个账号';
     click();
-    return opened && rows.every(r => r.hidden === true) && btn.textContent === '其余 2 个账号，展开';
+    return opened && survived && tbody.rows.every(r => r.hidden === true) &&
+      tbody.btn.textContent === '其余 2 个账号，展开';
   })(),
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "comp-card-*.cjs")
