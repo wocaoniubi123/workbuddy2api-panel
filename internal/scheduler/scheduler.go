@@ -782,8 +782,23 @@ func poolPackages(in []upstream.CreditPackage) []pool.Package {
 // 解冻语义与签到一致（ReenableIfCredits：余额 > 0 的冷却账号自动解冻），
 // 但不做签到、不刷新 token——只让"积分"这个观测量保持新鲜。
 // 供两类入口复用：后台周期任务（StartBalanceRefresh）与面板手动全量刷新。
+// balanceRefreshHardLimit 单轮余额刷新的硬上限。
+//
+// 依据（已核实）：单号最坏耗时 = c.HTTP 超时 120s × (1 次首试 + 最多 3 次重试)
+// + 退避 2s/5s/10s ≈ 8 分钟（retryBillingTransient 有界，见 upstream/report.go:117）；
+// 所有 .Do( 调用点都用 c.HTTP，没有无限超时的 client。整轮并发，理论上限同量级，留 10 分钟余量。
+//
+// 为什么要这道兜底（事实，非推断）：2026-10-18 14:18 启动的实例，overview.balance_refreshed_at
+// 始终为零值、sys 日志里没有 "scheduler: 余额后台刷新每 5m0s"（该行在 RunBalanceRefreshNow
+// 返回之后才打，见下方 for 循环），即整轮从未返回；表现为「积分历史不再新增、池内余额只被本地
+// 扣费往下推」。根因尚未定位（需要 goroutine dump），故先加上限保证一个卡住的号不拖死定时器。
+const balanceRefreshHardLimit = 10 * time.Minute
+
 func (s *Scheduler) RunBalanceRefreshNow() {
+	start := time.Now()
 	var wg sync.WaitGroup
+	var pending atomic.Int64 // 仍在跑的号数：超时时报出来，作为下次定位的线索
+	var total int
 	expiringSoon := s.ExpiringSoonWindow()
 	includeDisabled := s.includeDisabledInTasks()
 	for _, st := range s.cfg.Pool.List() {
@@ -794,9 +809,12 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 		if a == nil {
 			continue
 		}
+		total++
 		wg.Add(1)
+		pending.Add(1)
 		go func(a *auth.Auth, uid string) {
 			defer wg.Done()
+			defer pending.Add(-1)
 			remain, total, expiring, earliestAt, earliestRemaining, buckets, packs, err := s.cfg.Upstream.UserResourceSnapshotWithPackages(a, expiringSoon)
 			if err != nil {
 				log.Printf("WARN: balance %s: %v", logfmt.Label(uid, a.Nickname), err)
@@ -815,8 +833,16 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 			})
 		}(a, st.UID)
 	}
-	wg.Wait()
-	s.lastBalanceRefresh.Store(time.Now().UnixNano())
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+		s.lastBalanceRefresh.Store(time.Now().UnixNano())
+		log.Printf("scheduler: 余额刷新完成 %d 个号（耗时 %s）", total, time.Since(start).Round(time.Millisecond))
+	case <-time.After(balanceRefreshHardLimit):
+		log.Printf("WARN: 余额刷新整轮超时（上限 %s，仍有 %d/%d 个号未返回）：放弃本轮，避免拖死后台刷新",
+			balanceRefreshHardLimit, pending.Load(), total)
+	}
 }
 
 // StartBalanceRefresh 后台周期性余额刷新（独立 ticker goroutine，ctx 取消即停）。

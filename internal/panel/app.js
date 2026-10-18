@@ -1066,6 +1066,17 @@ function reqTokenCell(e) {
   return total ? fmtTokShort(total) : '—';
 }
 
+/* 缓存命中率（对齐旧网关 cacheRateCell）：颜色即健康度——≥90% 绿 / 80–90% 黄 / <80% 红，
+   样本不足灰。title 带命中/未命中绝对量，供逐项核对。 */
+function cacheRateCell(hit, miss) {
+  const h = Number(hit || 0), m = Number(miss || 0), total = h + m;
+  if (!total) return '<span class="muted">—</span>';
+  const pct = h / total * 100;
+  const color = pct >= 90 ? 'var(--ok)' : (pct >= 80 ? 'var(--warn)' : 'var(--bad)');
+  const txt = trimFixed(pct.toFixed(1)) + '%';
+  return '<span style="color:' + color + '" title="命中 ' + fmtTok(h) + ' / 未命中 ' + fmtTok(m) + ' tok">' + txt + '</span>';
+}
+
 function reqCreditCell(e) {
   if (!e || !e.credit_known) return '<span class="muted">—</span>';
   const v = Number(e.credit);
@@ -1092,11 +1103,12 @@ function renderRequestTable() {
       '<td>' + (ua ? '<span class="clip" title="' + esc(ua) + '">' + esc(ua) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td class="num">' + fmtMs(e && e.duration_ms) + '</td>' +
       '<td class="num">' + reqTokenCell(e) + '</td>' +
+      '<td class="num">' + cacheRateCell(e && e.cache_hit_tokens, e && e.cache_miss_tokens) + '</td>' +
       '<td class="num">' + reqCreditCell(e) + '</td>' +
       '<td>' + (rid ? '<span class="clip rid" title="' + esc(rid) + '">' + esc(rid) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td>' + (e && e.effort ? esc(e.effort) : '<span class="muted">—</span>') + '</td>' +
       '</tr>';
-  }).join('') || '<tr><td colspan="11" class="empty">' +
+  }).join('') || '<tr><td colspan="12" class="empty">' +
       (reqEntries.length ? '没有符合当前筛选条件的请求记录' : '暂无请求记录') + '</td></tr>';
 
   const filtered = list.length !== reqEntries.length;
