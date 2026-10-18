@@ -15,6 +15,7 @@
   --accent: #5b7cfa; --accent-ink: #ffffff; --accent-soft: rgba(91,124,250,.13);
   --ok: #3ddc97; --ok-soft: rgba(61,220,151,.12);
   --warn: #f5b544; --warn-soft: rgba(245,181,68,.12);
+  --credit: #e8a33d;
   --bad: #f0655f; --bad-soft: rgba(240,101,95,.12);
   --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.5);
   --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
@@ -27,6 +28,7 @@
   --accent: #3d5fe0; --accent-ink: #ffffff; --accent-soft: rgba(61,95,224,.09);
   --ok: #0f9d63; --ok-soft: rgba(15,157,99,.1);
   --warn: #b47611; --warn-soft: rgba(180,118,17,.11);
+  --credit: #b97a10;
   --bad: #cf3b34; --bad-soft: rgba(207,59,52,.09);
   --shadow: 0 1px 2px rgba(16,20,32,.06), 0 8px 24px -14px rgba(16,20,32,.14);
 }
@@ -404,6 +406,11 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .kpis.k4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   @media (max-width: 1180px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
   @media (max-width: 700px) { .kpis, .kpis.k4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  /* 用量页顶栏是 8 张卡（消耗积分 + 使用状态 + 六张主指标，见 app.js renderUsage）：
+     单独给 8 列，否则会排成 6+2（第二行只剩两张，右边大片空白）。 */
+  #usStats { grid-template-columns: repeat(8, minmax(0, 1fr)); }
+  @media (max-width: 1180px) { #usStats { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  @media (max-width: 700px) { #usStats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .kpi {
     position: relative; min-width: 0; overflow: hidden;
     background: var(--surface-2); border: 1px solid var(--line-soft);
@@ -427,6 +434,8 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   /* 中性但带一点主色：用于 prompt / 平均延迟这类"要看但不抢眼"的指标——
      纯灰轨在深色主题下几乎看不见，纯主色又会让六张卡都在喊。 */
   .kpi.c-soft { --kpi-c: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+  /* 积分橙：与 --credit 同源（旧网关的「消耗积分」卡颜色），区别于 warn 黄——积分是钱，不是警告。 */
+  .kpi.c-credit { --kpi-c: var(--credit); } .kpi.c-credit .v { color: var(--credit); }
   /* KPI 内的构成条（总 token 卡的 prompt/completion 占比） */
   .kpi .kbar { display: flex; height: 4px; border-radius: 3px; overflow: hidden;
     background: var(--line); margin-top: 7px; }

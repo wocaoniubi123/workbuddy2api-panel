@@ -2208,7 +2208,7 @@ function renderUsage(d) {
   // 八张卡（消耗积分 + 「使用状态」+ 六张主指标）：主指标用强调色，completion 用
   // 成功色（与图表里的绿柱呼应），失败/延迟只在有值时上语义色。
   $('usStats').innerHTML =
-    usKpi(fmtCredit(t.credits), '消耗积分 · 均 ' + fmtCreditRatio(t.credits_per_1m_tokens, t.credit_samples, t.credit_tokens), 'c-warn') +
+    usKpi(fmtCredit(t.credits), '消耗积分 · 均 ' + fmtCreditRatio(t.credits_per_1m_tokens, t.credit_samples, t.credit_tokens), 'c-credit') +
     '<div class="kpi"><div class="v" id="usLive">—</div></div>' +
     usKpi(fmtTok(reqs), '请求数', 'c-accent',
       errs ? '其中失败 ' + errs + ' 次' : '全部成功') +
