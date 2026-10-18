@@ -63,14 +63,14 @@ func TestPanelModelsIncludesImageModels(t *testing.T) {
 	var chat, image, video bool
 	for _, m := range resp.Models {
 		switch m["id"] {
-		case "cn:glm-5.2":
+		case "glm-5.2":
 			chat = true
 			if m["image_generation"] == true {
 				t.Errorf("对话模型不应带 image_generation：%v", m)
 			}
-		case "cn:seedance-2.5":
+		case "seedance-2.5":
 			video = true // 视频模型不该出现（端点已撤回）——出现即失败
-		case "cn:hunyuan-image-alpha":
+		case "hunyuan-image-alpha":
 			image = m["image_generation"] == true
 			if m["name"] != "Hunyuan Image Alpha" {
 				t.Errorf("出图模型应带名字：%v", m)
@@ -135,10 +135,10 @@ func TestPanelModelsAttachesBusyLevels(t *testing.T) {
 			seen[m["id"].(string)] = v.(string)
 		}
 	}
-	if seen["cn:glm-5.2"] != "congested" {
-		t.Fatalf("cn:glm-5.2 繁忙度未附上: %v（全部 entry=%v）", seen, resp.Models)
+	if seen["glm-5.2"] != "congested" {
+		t.Fatalf("glm-5.2 繁忙度未附上: %v（全部 entry=%v）", seen, resp.Models)
 	}
-	if _, ok := seen["cn:glm-5.3-flash"]; ok {
+	if _, ok := seen["glm-5.3-flash"]; ok {
 		t.Fatalf("上游未返回的模型不该凭空有繁忙度: %v", seen)
 	}
 }

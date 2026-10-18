@@ -418,8 +418,10 @@ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[strin
 func (h *Handler) modelList() []map[string]any {
 	out := make([]map[string]any, 0)
 	for _, mi := range h.fetchDynamicModels() {
+		// CN 模型输出**裸名**（不加 "cn:"）：resolveModel 对无前缀名默认按 CN 路由，
+		// 客户端直接填裸名即可；只有 global 同名模型才需要 "global:" 前缀区分。
 		entry := map[string]any{
-			"id":       "cn:" + mi.ID,
+			"id":       mi.ID,
 			"object":   "model",
 			"created":  1753600000,
 			"owned_by": "workbuddy",
@@ -510,8 +512,13 @@ func (h *Handler) generationModelEntries() []map[string]any {
 			if mi.GenerationKind != "image" {
 				continue
 			}
+			// 与对话模型同口径：CN 出图模型也用裸名，只有 global 域加前缀。
+			genID := mi.ID
+			if realm != "cn" {
+				genID = realm + ":" + mi.ID
+			}
 			entry := map[string]any{
-				"id":               realm + ":" + mi.ID,
+				"id":               genID,
 				"object":           "model",
 				"created":          1753600000,
 				"owned_by":         "workbuddy",

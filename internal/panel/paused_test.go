@@ -110,7 +110,8 @@ func TestAppJSAccountRowPausedBadgeAndButton(t *testing.T) {
 const vm = require('vm');
 const assert = require('assert');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-const start = src.indexOf('function renderAccounts('), end = src.indexOf('async function loadOverview(');
+// 从 accSortForDisplay 起截：renderAccounts 依赖它做展示排序（积分降序 / 禁用垫底）。
+const start = src.indexOf('function accSortForDisplay'), end = src.indexOf('async function loadOverview(');
 assert.ok(start >= 0 && end > start, 'renderAccounts not found');
 const tb = { innerHTML: '' };
 const ctx = {

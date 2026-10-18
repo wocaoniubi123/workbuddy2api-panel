@@ -135,7 +135,7 @@ const TRANGE_PRESETS = [
   ['0', '全部历史'],
   ['custom', '自定义…'],
 ];
-const TRANGE_DEFAULT = '72';
+const TRANGE_DEFAULT = 'today';
 const trangeStates = new Map(); // hostId → { preset, from: Date|null, to: Date|null }
 
 // dtLocalValue / dtLocalParse 与 <input type=datetime-local> 的取值格式互转
@@ -374,7 +374,7 @@ function go(v) {
   if (v === 'models' && !$('mdBody').children.length) loadModels();
   if (v === 'config') loadConfig();
   if (v === 'logs') loadLogs();
-  if (v === 'usage') loadUsage();
+  if (v === 'usage') { loadUsage(); usAutoStart(); } else { usAutoStop(); }
   if (v === 'packages') loadPackages();
   // 补偿状态按需拉取：compData 为空才打上游（失败留空 → 下次进入重试）。
   if (v === 'taskscenter') { reattachQueueView(); if (!compData) loadCompensation(); }
@@ -2577,7 +2577,20 @@ function renderUsageLive(ov) {
   host.innerHTML = html;
 }
 
+/* usTimer/usBusy/usAutoStart/usAutoStop：用量页 1 秒自动刷新。
+   启停挂在路由 go()：进入用量页开、离开即停，不在后台空转。
+   loadUsage 用 usBusy 防堆叠（1 秒档常见：上一轮没返回就跳过本轮，不排队）。 */
+let usTimer = null;
+let usBusy = false;
+function usAutoStop() { if (usTimer) { clearInterval(usTimer); usTimer = null; } }
+function usAutoStart() {
+  usAutoStop();
+  usTimer = setInterval(loadUsage, 1000);
+}
+
 async function loadUsage() {
+  if (usBusy) return; // 上一轮还没返回：跳过本轮，避免请求堆叠
+  usBusy = true;
   const q = trangeQuery('usRange', true);
   try {
     await warmUsageModelRates();
@@ -2603,6 +2616,8 @@ async function loadUsage() {
     $('usCreditTabs').innerHTML = usTabsHtml([['account', '按账号'], ['model', '按模型']], usCreditDim, null);
     $('usDimBody').innerHTML = '<tr><td colspan="10" class="empty">读取用量失败</td></tr>';
     $('usCreditBody').innerHTML = '<tr><td colspan="7" class="empty">读取用量失败</td></tr>';
+  } finally {
+    usBusy = false; // 成功/失败都释放，否则一次异常会让自动刷新永远停摆
   }
 }
 

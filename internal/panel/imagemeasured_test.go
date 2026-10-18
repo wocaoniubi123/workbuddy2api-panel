@@ -134,7 +134,7 @@ func TestPanelImageModelCreditWithCatalogPrice(t *testing.T) {
 	}
 	var img map[string]any
 	for _, m := range resp.Models {
-		if m["id"] == "cn:hunyuan-image-alpha" {
+		if m["id"] == "hunyuan-image-alpha" {
 			img = m
 		}
 	}

@@ -598,15 +598,31 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 	// 模型繁忙度（官方 /v2/chat/busy，只读观测，见 upstream/modelbusy.go）：与目录同一批
 	// 账号查，附到对应域的行上。查不到就不填字段（不编造）；失败只并入 fetchErrs（目录本身
 	// 已经拿到了，不该因为繁忙度查询失败把整个视图打成 502）。
+	// 按域挑条目：CN 是裸名（不含 ':'），global 带 "global:" 前缀——与上面的 id 口径一致。
+	// 用同一个判定函数供两处复用（挑 ids 与回写 busy），避免两处规则漂移。
+	belongsTo := func(id, realm string) (string, bool) {
+		if realm == "cn" {
+			if id != "" && !strings.Contains(id, ":") {
+				return id, true
+			}
+			return "", false
+		}
+		prefix := realm + ":"
+		if strings.HasPrefix(id, prefix) {
+			return strings.TrimPrefix(id, prefix), true
+		}
+		return "", false
+	}
 	for realm, acct := range map[string]*auth.Auth{"cn": cnAcct, "global": globalAcct} {
 		if acct == nil {
 			continue
 		}
-		prefix := realm + ":"
 		var ids []string
 		for _, e := range out {
-			if id, _ := e["id"].(string); strings.HasPrefix(id, prefix) {
-				ids = append(ids, strings.TrimPrefix(id, prefix))
+			if id, _ := e["id"].(string); id != "" {
+				if bare, ok := belongsTo(id, realm); ok {
+					ids = append(ids, bare)
+				}
 			}
 		}
 		if len(ids) == 0 {
@@ -618,9 +634,11 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		for _, e := range out {
-			if id, _ := e["id"].(string); strings.HasPrefix(id, prefix) {
-				if lv := levels[strings.TrimPrefix(id, prefix)]; lv != "" {
-					e["busy"] = lv
+			if id, _ := e["id"].(string); id != "" {
+				if bare, ok := belongsTo(id, realm); ok {
+					if lv := levels[bare]; lv != "" {
+						e["busy"] = lv
+					}
 				}
 			}
 		}
@@ -648,8 +666,14 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 // context_length / max_output_tokens 走四级查找链，effort 档位按 realm 域取
 // EffortListing（远端权威 ∪ 静态兜底表）——与 /v1/models 同一口径，两侧不再漂移。
 func panelModelEntry(realm string, mi upstream.ModelInfo, remoteEfforts []string, remoteDefault string, httpc *http.Client) map[string]any {
+	// CN 域输出裸名（与 /v1/models 同口径）：网关 resolveModel 对无前缀名默认走 CN，
+	// 裸名即可调用；只有 global 域需要 "global:" 前缀区分同名模型。
+	entryID := mi.ID
+	if realm != "cn" {
+		entryID = realm + ":" + mi.ID
+	}
 	entry := map[string]any{
-		"id":                   realm + ":" + mi.ID,
+		"id":                   entryID,
 		"name":                 mi.Name,
 		"default_effort":       mi.DefaultEffort,
 		"supported_efforts":    mi.Efforts,
