@@ -198,6 +198,8 @@ func (p *Pool) applyAccountsLocked(accounts map[string]stateAccount) {
 			e.creditsEarliestExpiry = e.expiryBuckets[0].ExpireAt
 			e.creditsEarliestRemaining = e.expiryBuckets[0].Remain
 		}
+		// 逐包明细快照：整体恢复（面板「积分构成」重启后立即可读）。
+		e.packages = s.Packages
 		// 熔断器持久化恢复：breakerUntil 未过期才恢复（过期不复活），retryCount 仅在
 		// 熔断仍有效时保留（否则归零，不保留无用退避指数）。
 		if s.BreakerUntil != nil && now.Before(*s.BreakerUntil) {
@@ -338,6 +340,7 @@ func (p *Pool) stateOverviewLocked() stateFile {
 			CreditsEarliestExpiry:    e.creditsEarliestExpiry,
 			CreditsEarliestRemaining: e.creditsEarliestRemaining,
 			CreditsExpiryBuckets:     append([]ExpiryBucket(nil), e.expiryBuckets...),
+			Packages:                 append([]Package(nil), e.packages...),
 		}
 		// 账号级冷却字段：仅禁用或仍在冷却时限内落盘（与熔断/降权同款惰性清洗）。
 		// 软冷却按墙钟到期、字段本身不清理，无条件落盘会让过期 reason 在 state.json 里

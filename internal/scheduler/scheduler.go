@@ -613,7 +613,7 @@ func (s *Scheduler) RunCheckinNow() {
 		}
 		// 分桶查余额：配置窗口内的积分单独标记，同时记录最早未来到期批次与
 		// 按自然日聚合的全部批次（首页快照与明细共用同一口径）。
-		remain, total, expiring, earliestAt, earliestRemaining, buckets, err := s.cfg.Upstream.UserResourceSnapshot(a, expiringSoon)
+		remain, total, expiring, earliestAt, earliestRemaining, buckets, packs, err := s.cfg.Upstream.UserResourceSnapshotWithPackages(a, expiringSoon)
 		if err != nil {
 			log.Printf("WARN: user-resource %s: %v", logfmt.Label(st.UID, st.Nickname), err)
 			continue
@@ -626,6 +626,7 @@ func (s *Scheduler) RunCheckinNow() {
 			EarliestAt:        earliestAt,
 			EarliestRemaining: earliestRemaining,
 			ExpiryBuckets:     poolExpiryBuckets(buckets),
+			Packages:          poolPackages(packs),
 		})
 	}
 	s.RunStreakBonusNow()
@@ -750,6 +751,30 @@ func poolExpiryBuckets(in []upstream.ExpiryBucket) []pool.ExpiryBucket {
 	return out
 }
 
+// poolPackages 把 upstream 的逐包明细转换为 pool 结构（同样为解耦不反向依赖）。
+func poolPackages(in []upstream.CreditPackage) []pool.Package {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]pool.Package, len(in))
+	for i, p := range in {
+		out[i] = pool.Package{
+			Name:           p.Name,
+			Remain:         p.Remain,
+			Used:           p.Used,
+			Size:           p.Size,
+			EndTime:        p.EndTime,
+			ExpiresAt:      p.ExpiresAt,
+			CreatedAt:      p.CreatedAt,
+			PackageCode:    p.PackageCode,
+			SubProductCode: p.SubProductCode,
+			SubProductName: p.SubProductName,
+			Cycle:          p.Cycle,
+		}
+	}
+	return out
+}
+
 // RunBalanceRefreshNow 并发查询余额并更新池内 credits。
 // 账号范围：默认跳过禁用账号；schedule.include_disabled_in_tasks 打开时一并刷新
 // （轮换用法下据此判断下一个该启用谁）。注意 ReenableIfCredits 对 disabled 是
@@ -772,7 +797,7 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 		wg.Add(1)
 		go func(a *auth.Auth, uid string) {
 			defer wg.Done()
-			remain, total, expiring, earliestAt, earliestRemaining, buckets, err := s.cfg.Upstream.UserResourceSnapshot(a, expiringSoon)
+			remain, total, expiring, earliestAt, earliestRemaining, buckets, packs, err := s.cfg.Upstream.UserResourceSnapshotWithPackages(a, expiringSoon)
 			if err != nil {
 				log.Printf("WARN: balance %s: %v", logfmt.Label(uid, a.Nickname), err)
 				s.noteBalanceAuthFailure(a, uid, err)
@@ -786,6 +811,7 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 				EarliestAt:        earliestAt,
 				EarliestRemaining: earliestRemaining,
 				ExpiryBuckets:     poolExpiryBuckets(buckets),
+				Packages:          poolPackages(packs),
 			})
 		}(a, st.UID)
 	}

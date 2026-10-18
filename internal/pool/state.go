@@ -758,6 +758,8 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 		// 拷贝一份：List 返回后 JSON 序列化在锁外进行，不能与 NoteModelCost 的
 		// 原地扣减共享底层数组（数据竞争）。
 		CreditsExpiryBuckets: append([]ExpiryBucket(nil), e.expiryBuckets...),
+		// 逐包明细快照：同样深拷贝（序列化在锁外，避免与余额刷新并发写共享数组）。
+		Packages: append([]Package(nil), e.packages...),
 		Priority:             p.priorityOf(uid),
 		Share:                p.shareOf(uid),
 		Cooling:              now.Before(e.until) || now.Before(e.breakerUntil),

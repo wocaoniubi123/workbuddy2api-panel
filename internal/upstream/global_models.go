@@ -189,6 +189,11 @@ func (c *Client) fetchGlobalModelsOnce(a *auth.Auth) (names []string, infos []Mo
 		seen[id] = true
 		merged = append(merged, id)
 	}
+	// 出口固定顺序（名称自然序，与 CN FetchModels 出口同一口径）：各探测路原始
+	// 顺序不统一（map 序 / 上游数组序），面板「模型与档位」与 /v1/models 共用本
+	// 出口，这里统一重排——names 与 infos 用同一比较器各自排序，两侧顺序一致。
+	sortNamesByName(merged)
+	sortModelInfosByName(infos)
 
 	c.globalModels.Lock()
 	c.globalModels.names = merged

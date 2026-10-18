@@ -74,6 +74,8 @@ type CreditsSnapshot struct {
 	EarliestAt        time.Time
 	EarliestRemaining int64
 	ExpiryBuckets     []ExpiryBucket
+	// Packages 逐包明细（余额刷新时顺带写入；面板「积分构成」读它，零额外上游调用）。
+	Packages []Package
 }
 
 // SetCreditsSnapshot 更新账号余额/总额、窗口内快过期子集、最早到期批次与按日到期批次。
@@ -122,6 +124,10 @@ func (p *Pool) SetCreditsSnapshot(uid string, s CreditsSnapshot) {
 	e.creditsEarliestExpiry = earliestAt
 	e.creditsEarliestRemaining = earliestRemaining
 	e.expiryBuckets = buckets
+	if s.Packages != nil {
+		// 整体替换（含零余额包），与 buckets 同语义：一次余额查询即一份完整快照。
+		e.packages = s.Packages
+	}
 	p.dirty.Store(true)
 }
 

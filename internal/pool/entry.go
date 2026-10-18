@@ -75,6 +75,24 @@ type ExpiryBucket struct {
 	Remain   int64     `json:"remain"`
 }
 
+// Package 单个积分包明细（面板「积分构成」视图用）。
+// 与 upstream.CreditPackage 同构；单独定义是为了不让底层 pool 反向依赖 upstream
+// （与 ExpiryBucket 同一约定）。
+type Package struct {
+	Name           string `json:"name"`
+	Remain         int64  `json:"remain"`
+	Used           int64  `json:"used"`
+	Size           int64  `json:"size"`
+	EndTime        string `json:"end_time,omitempty"`
+	ExpiresAt      int64  `json:"expires_at,omitempty"`
+	CreatedAt      string `json:"created_at,omitempty"`
+	PackageCode    string `json:"package_code,omitempty"`
+	SubProductCode string `json:"sub_product_code,omitempty"`
+	SubProductName string `json:"sub_product_name,omitempty"`
+	// Cycle 为 true 表示按周期发放的包（上游 CycleCapacity* 字段）。
+	Cycle bool `json:"cycle,omitempty"`
+}
+
 // Status 单个账号对外暴露的状态（脱敏）。
 type Status struct {
 	UID          string `json:"uid"`
@@ -98,6 +116,9 @@ type Status struct {
 	// 面板首页「积分到期提醒」快照直接用它渲染，与明细的逐包按日汇总同口径；
 	// 只有最早一批的旧字段无法表达「同一天多个包」「后续批次」。
 	CreditsExpiryBuckets []ExpiryBucket `json:"credits_expiry_buckets,omitempty"`
+	// Packages 逐包明细快照（余额刷新写入；面板「积分构成」直接读它，
+	// 不再逐账号实时查上游——旧实现一次页面 32 次调用，与余额刷新重复）。
+	Packages []Package `json:"packages,omitempty"`
 	// Priority / Share 账号级路由偏好（issue #62，config 里的 account_priority /
 	// account_share），0 = 未配置。透出来是为了让配置能自证生效：uid 打错时这里恒 0。
 	Priority      int       `json:"priority,omitempty"`
@@ -232,7 +253,9 @@ type entry struct {
 	// expiryBuckets 全部未来到期批次按自然日聚合（升序）。供面板快照展示与
 	// NoteModelCost 的 FEFO 近似扣减；由 SetCreditsSnapshot 整体替换。
 	expiryBuckets []ExpiryBucket
-	successCount  int64      // 累计成功
+	// packages 逐包明细快照（余额刷新写入，面板 packages 接口读取，不再单独打上游）。
+	packages     []Package
+	successCount int64      // 累计成功
 	errTotal      int64      // 累计错误（供成功率权重 successRate = successCount/(successCount+errTotal)，不清零）
 	lastErr       time.Time  // 最近一次错误时间
 	lastSuccess   time.Time  // 最近一次成功时间
@@ -549,6 +572,9 @@ type stateAccount struct {
 	// CreditsExpiryBuckets 全部未来到期批次按自然日聚合。持久化后重启即可用完整
 	// 快照渲染首页卡片；恢复时惰性剔除已过期/零剩余条目。
 	CreditsExpiryBuckets []ExpiryBucket `json:"credits_expiry_buckets,omitempty"`
+	// Packages 逐包明细快照（余额刷新写入）。持久化让重启后「积分构成」直接显示，
+	// 与 credits/到期批次同口径，不在重启到首轮刷新之间留空窗。
+	Packages []Package `json:"packages,omitempty"`
 	// ModelCooldowns 模型级独立冷却表（model → 冷却记录：6004 重置墙钟 / 11102
 	// 负缓存退避）。持久化：6004 对齐上游重置墙钟后单模型冷却可长达数小时，
 	// 跨重启是常态；不持久化会导致 healthyForModel 重启失忆、重新踩雷区。

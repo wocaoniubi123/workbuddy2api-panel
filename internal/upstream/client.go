@@ -1569,6 +1569,10 @@ func (c *Client) FetchModels(a *auth.Auth) ([]ModelInfo, error) {
 	if len(out) == 0 {
 		return nil, fmt.Errorf("models api returned empty list")
 	}
+	// 出口固定顺序：v3 路的 id 列表由 map 迭代生成（每次随机），合并后统一按
+	// 名称自然序重排——面板「重新获取」与 /v1/models 共用本出口，一处排序两处
+	// 稳定；global 域同口径（见 global_models.go 的 fetchGlobalModelsOnce）。
+	sortModelInfosByName(out)
 	c.storeModelRates(a.Realm(), out)
 	c.storeModelMaxOut(a.Realm(), out)
 	// 刷新 effort 能力缓存（供请求体降级；无 supportedEfforts 的模型不入桶）。
@@ -2406,6 +2410,24 @@ func (c *Client) UserResourceDetailedWithExpiry(a *auth.Auth, soon time.Duration
 // 把套餐型包的月度周期重置日当成了到期日（实测：cycle=2026-10-31，deduction=2034-12-24），
 // 首页快照因此长期错报最近到期时间与数量。
 func (c *Client) UserResourceSnapshot(a *auth.Auth, soon time.Duration) (remain, total, expiring int64, earliestAt time.Time, earliestRemaining int64, buckets []ExpiryBucket, err error) {
+	remain, total, expiring, earliestAt, earliestRemaining, buckets, _, err = c.userResourceSnapshotInternal(a, soon)
+	return
+}
+
+// UserResourceSnapshotWithPackages 在 UserResourceSnapshot 基础上额外返回**逐包明细**
+// （packs）。与 UserResourceSnapshot 共用同一次上游请求——余额刷新一次调用即可同时
+// 得到「汇总 + 到期批次 + 逐包明细」，面板「积分构成」直接读池子快照，不再逐账号
+// 实时查上游（旧实现：面板一次 32 次 + 余额刷新 32 次 = 双份调用）。
+//
+// packs 口径与 CreditPackages 对齐：Remain/Size/Used 用同一份聚合结果（packageRemainUsed
+// 的 r/size），到期时刻用 packageEndAt（DeductionEndTime 优先），Cycle 按 CycleCapacitySize>0
+// 判定；含零余额包（面板要展示「已用完」的批次）。
+func (c *Client) UserResourceSnapshotWithPackages(a *auth.Auth, soon time.Duration) (remain, total, expiring int64, earliestAt time.Time, earliestRemaining int64, buckets []ExpiryBucket, packs []CreditPackage, err error) {
+	return c.userResourceSnapshotInternal(a, soon)
+}
+
+// userResourceSnapshotInternal 是 UserResourceSnapshot / ...WithPackages 的共同实现。
+func (c *Client) userResourceSnapshotInternal(a *auth.Auth, soon time.Duration) (remain, total, expiring int64, earliestAt time.Time, earliestRemaining int64, buckets []ExpiryBucket, packs []CreditPackage, err error) {
 	// 企业版额度不在「个人资源包」体系内：get-user-resource* 对 enterpriseId 非空账号
 	// 恒返回空 Accounts（实测 code 0 且 Accounts null），故分流到企业口径端点。
 	if a.IsEnterprise() {
@@ -2440,13 +2462,18 @@ func (c *Client) UserResourceSnapshot(a *auth.Auth, soon time.Duration) (remain,
 		return e
 	})
 	if err != nil {
-		return 0, 0, 0, time.Time{}, 0, nil, err
+		return 0, 0, 0, time.Time{}, 0, nil, nil, err
 	}
 	var resp struct {
 		Response struct {
 			Data struct {
 				Accounts []struct {
 					PackageName string `json:"PackageName"`
+					// 以下四个字段供「逐包明细」快照使用（面板积分构成读池子，不再单独打上游）。
+					PackageCode    string `json:"PackageCode"`
+					SubProductCode string `json:"SubProductCode"`
+					SubProductName string `json:"SubProductName"`
+					CreateTime     int64  `json:"CreateTime"` // 发放时刻（epoch 毫秒）
 					// DeductionEndTime 真实扣费截止（epoch 毫秒）；CycleEndTime 只是
 					// 月度计量周期（见 packageEndAt 注释）。
 					DeductionEndTime    int64  `json:"DeductionEndTime"`
@@ -2463,7 +2490,7 @@ func (c *Client) UserResourceSnapshot(a *auth.Auth, soon time.Duration) (remain,
 		} `json:"Response"`
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return 0, 0, 0, time.Time{}, 0, nil, fmt.Errorf("resource parse: %w", err)
+		return 0, 0, 0, time.Time{}, 0, nil, nil, fmt.Errorf("resource parse: %w", err)
 	}
 	byDate := make(map[string]*ExpiryBucket)
 	for _, acct := range resp.Response.Data.Accounts {
@@ -2481,6 +2508,27 @@ func (c *Client) UserResourceSnapshot(a *auth.Auth, soon time.Duration) (remain,
 		if size < r {
 			size = r
 		}
+		// 逐包明细（含零余额包，面板要展示「已用完」的批次）：与汇总同一份聚合结果，
+		// 不额外发请求；到期时刻走 packageEndAt（DeductionEndTime 优先）。
+		cp := CreditPackage{
+			Name:           acct.PackageName,
+			PackageCode:    acct.PackageCode,
+			SubProductCode: acct.SubProductCode,
+			SubProductName: acct.SubProductName,
+			Remain:         r,
+			Size:           size,
+			Used:           size - r,
+			Cycle:          acct.CycleCapacitySize > 0,
+		}
+		if pEnd, ok2 := packageEndAt(acct.DeductionEndTime, acct.ExpiredTime, acct.CycleEndTime); ok2 {
+			cp.EndTime = pEnd.Format(packageEndLayout)
+			cp.ExpiresAt = pEnd.UnixMilli()
+		}
+		if acct.CreateTime > 0 {
+			cp.CreatedAt = time.UnixMilli(acct.CreateTime).Format(time.RFC3339)
+		}
+		packs = append(packs, cp)
+
 		remain += r
 		total += size
 		if r <= 0 {
@@ -2522,7 +2570,7 @@ func (c *Client) UserResourceSnapshot(a *auth.Auth, soon time.Duration) (remain,
 		earliestRemaining = buckets[0].Remain
 	}
 	c.notifyCredits(a, remain, nil)
-	return remain, total, expiring, earliestAt, earliestRemaining, buckets, nil
+	return remain, total, expiring, earliestAt, earliestRemaining, buckets, packs, nil
 }
 
 // SetCreditObserver 挂载/注销（nil）余额观察者。可在启动后任意时刻调用；

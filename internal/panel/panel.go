@@ -272,6 +272,31 @@ func poolExpiryBuckets(in []upstream.ExpiryBucket) []pool.ExpiryBucket {
 	return out
 }
 
+// poolPackages 把 upstream 的逐包明细转换为 pool 结构（与 poolExpiryBuckets 同一约定：
+// 手工转换，避免底层 pool 反向依赖 upstream）。
+func poolPackages(in []upstream.CreditPackage) []pool.Package {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]pool.Package, len(in))
+	for i, p := range in {
+		out[i] = pool.Package{
+			Name:           p.Name,
+			Remain:         p.Remain,
+			Used:           p.Used,
+			Size:           p.Size,
+			EndTime:        p.EndTime,
+			ExpiresAt:      p.ExpiresAt,
+			CreatedAt:      p.CreatedAt,
+			PackageCode:    p.PackageCode,
+			SubProductCode: p.SubProductCode,
+			SubProductName: p.SubProductName,
+			Cycle:          p.Cycle,
+		}
+	}
+	return out
+}
+
 // ---------------------------------------------------------------------------
 // 只读接口
 // ---------------------------------------------------------------------------
@@ -809,7 +834,7 @@ func (p *Panel) accountCheckin(w http.ResponseWriter, r *http.Request) {
 			resp["checkin_error"] = checkinMsg
 		}
 	}
-	remain, total, expiring, earliestAt, earliestRemaining, buckets, err := p.cfg.Upstream.UserResourceSnapshot(a, p.expiringSoonWindow())
+	remain, total, expiring, earliestAt, earliestRemaining, buckets, packs, err := p.cfg.Upstream.UserResourceSnapshotWithPackages(a, p.expiringSoonWindow())
 	if err != nil {
 		resp["balance_error"] = err.Error()
 		writeJSON(w, http.StatusOK, resp)
@@ -823,6 +848,7 @@ func (p *Panel) accountCheckin(w http.ResponseWriter, r *http.Request) {
 		EarliestAt:        earliestAt,
 		EarliestRemaining: earliestRemaining,
 		ExpiryBuckets:     poolExpiryBuckets(buckets),
+		Packages:          poolPackages(packs),
 	})
 	resp["credits"] = remain
 	resp["credits_total"] = total
@@ -838,7 +864,7 @@ func (p *Panel) accountBalance(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "account not found")
 		return
 	}
-	remain, total, expiring, earliestAt, earliestRemaining, buckets, err := p.cfg.Upstream.UserResourceSnapshot(a, p.expiringSoonWindow())
+	remain, total, expiring, earliestAt, earliestRemaining, buckets, packs, err := p.cfg.Upstream.UserResourceSnapshotWithPackages(a, p.expiringSoonWindow())
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "user resource: "+err.Error())
 		return
@@ -850,6 +876,7 @@ func (p *Panel) accountBalance(w http.ResponseWriter, r *http.Request) {
 		EarliestAt:        earliestAt,
 		EarliestRemaining: earliestRemaining,
 		ExpiryBuckets:     poolExpiryBuckets(buckets),
+		Packages:          poolPackages(packs),
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "credits": remain, "credits_total": total})
 }
@@ -1074,56 +1101,43 @@ func (p *Panel) usageSave(w http.ResponseWriter, r *http.Request) {
 //
 // 逐个账号向上游查（并发有上限，避免瞬时打满上游限流），失败只在对应账号上
 // 标 error，不影响其它账号——一个号 token 失效不该让整页空白。
+// packages 返回全部账号的积分包构成，供「积分构成」视图与首页到期提醒共用。
+//
+// 数据来自池内的**逐包明细快照**（余额刷新时一次请求写入），不再逐账号实时查上游：
+// 旧实现对每个账号各打一次 billing/meter（并发 3），页面一开就是 32 次调用，且与
+// 余额刷新完全重复。现在秒回、零额外上游调用；从未刷新过的账号快照为空。
 func (p *Panel) packages(w http.ResponseWriter, r *http.Request) {
-	accts := p.cfg.Pool.List()
 	type row struct {
-		UID      string                   `json:"uid"`
-		Nickname string                   `json:"nickname"`
-		Realm    string                   `json:"realm"`
-		Remain   int64                    `json:"remain"`
-		Size     int64                    `json:"size"`
-		Packages []upstream.CreditPackage `json:"packages"`
+		UID      string         `json:"uid"`
+		Nickname string         `json:"nickname"`
+		Realm    string         `json:"realm"`
+		Remain   int64          `json:"remain"`
+		Size     int64          `json:"size"`
+		Packages []pool.Package `json:"packages"`
 		// Plan/PlanEvidence 账号套餐分类（见 pool.ClassifyPlan）：包名派生，无包时 unknown。
 		Plan         pool.PlanKind `json:"plan"`
 		PlanEvidence string        `json:"plan_evidence,omitempty"`
 		Error        string        `json:"error,omitempty"`
 	}
-	out := make([]row, len(accts))
-
-	sem := make(chan struct{}, 3)
-	var wg sync.WaitGroup
-	for i, s := range accts {
-		wg.Add(1)
-		go func(i int, s pool.Status) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			it := row{UID: s.UID, Nickname: s.Nickname, Realm: s.Realm}
-			a := p.cfg.Pool.AuthByUID(s.UID)
-			if a == nil {
-				it.Error = "account not loaded"
-				out[i] = it
-				return
-			}
-			packs, remain, size, err := p.cfg.Upstream.CreditPackages(a)
-			if err != nil {
-				it.Error = err.Error()
-				out[i] = it
-				return
-			}
-			it.Packages = packs
-			it.Remain = remain
-			it.Size = size
-			names := make([]string, 0, len(packs))
-			for _, pk := range packs {
-				names = append(names, pk.Name)
-			}
-			it.Plan, it.PlanEvidence = pool.ClassifyPlan(names)
-			out[i] = it
-		}(i, s)
+	accts := p.cfg.Pool.List()
+	out := make([]row, 0, len(accts))
+	for _, s := range accts {
+		names := make([]string, 0, len(s.Packages))
+		for _, pk := range s.Packages {
+			names = append(names, pk.Name)
+		}
+		plan, evidence := pool.ClassifyPlan(names)
+		out = append(out, row{
+			UID:          s.UID,
+			Nickname:     s.Nickname,
+			Realm:        s.Realm,
+			Remain:       s.Credits,
+			Size:         s.CreditsTotal,
+			Packages:     s.Packages,
+			Plan:         plan,
+			PlanEvidence: evidence,
+		})
 	}
-	wg.Wait()
 
 	// 余额降序：多的在前，便于和少的对比。
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Remain > out[j].Remain })
