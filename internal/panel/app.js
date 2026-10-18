@@ -1083,8 +1083,9 @@ function renderRequestTable() {
       '<td class="num">' + reqTokenCell(e) + '</td>' +
       '<td class="num">' + reqCreditCell(e) + '</td>' +
       '<td>' + (rid ? '<span class="clip rid" title="' + esc(rid) + '">' + esc(rid) + '</span>' : '<span class="muted">—</span>') + '</td>' +
+      '<td>' + (e && e.effort ? esc(e.effort) : '<span class="muted">—</span>') + '</td>' +
       '</tr>';
-  }).join('') || '<tr><td colspan="10" class="empty">' +
+  }).join('') || '<tr><td colspan="11" class="empty">' +
       (reqEntries.length ? '没有符合当前筛选条件的请求记录' : '暂无请求记录') + '</td></tr>';
 
   const filtered = list.length !== reqEntries.length;
@@ -1139,6 +1140,7 @@ function requestLogText(e) {
     credit,
     cacheRateText(e && e.cache_hit_tokens, e && e.cache_miss_tokens) === '—' ? '' : '命中 ' + cacheRateText(e && e.cache_hit_tokens, e && e.cache_miss_tokens),
     e && e.request_id || '—',
+    '思考=' + (e && e.effort ? String(e.effort) : '-'),
   ].filter(Boolean).join(' | ');
 }
 
@@ -2183,9 +2185,11 @@ function renderUsage(d) {
   const okRate = reqs ? (reqs - errs) / reqs * 100 : null;
   // 构成条要的是合法 CSS 宽度，usPct 在无样本时返回 "—"，不能直接拼进 style。
   const pctW = (part) => total ? Math.max(0, Math.min(100, Number(part || 0) / total * 100)).toFixed(2) + '%' : '0%';
-  // 六张卡：主指标用强调色，completion 用成功色（与图表里的绿柱呼应），
-  // 失败/延迟只在有值时上语义色——全绿全黄的仪表盘等于没有重点。
+  // 八张卡（消耗积分 + 「使用状态」+ 六张主指标）：主指标用强调色，completion 用
+  // 成功色（与图表里的绿柱呼应），失败/延迟只在有值时上语义色。
   $('usStats').innerHTML =
+    usKpi(fmtCredit(t.credits), '消耗积分 · 均 ' + fmtCreditRatio(t.credits_per_1m_tokens, t.credit_samples, t.credit_tokens), 'c-warn') +
+    '<div class="kpi"><div class="v" id="usLive">—</div></div>' +
     usKpi(fmtTok(reqs), '请求数', 'c-accent',
       errs ? '其中失败 ' + errs + ' 次' : '全部成功') +
     usKpi(fmtTok(total), '总 token', 'c-accent',
@@ -2215,9 +2219,8 @@ function renderUsage(d) {
   $('usNote').textContent = note;
   $('usNote').title = note; // 窄屏单行截断时靠悬停看全
 
-  // 积分扣除的四张卡片与说明。
+  // 积分扣除的四张卡片与说明（消耗积分已提到顶栏第 1 格，这里不重复）。
   $('usCreditStats').innerHTML =
-    usKpi(fmtCredit(t.credits), '扣除积分', 'c-accent', '按上游 usage.credit 累计') +
     usKpi(fmtTok(t.credit_tokens), '匹配 Token', 'c-mute', '与积分同时观测到的 Token') +
     usKpi(fmtCreditRatio(t.credits_per_1m_tokens, t.credit_samples, t.credit_tokens),
       '平均积分 / 1M Token', 'c-ok', '越低越划算') +
@@ -2504,12 +2507,66 @@ async function warmUsageModelRates() {
   usageRateWarmAt = Date.now();
 }
 
+/* usLiveAgo 空闲时长档位：<1 分钟「x 秒前」→ x 分钟前 → x 小时前 → 昨天 / x 天前。
+   原 <1 分钟显示「刚刚」，但这两个超密字在 11.5px 光栅化时会糊并成一个块
+   （实测放大像素：换字重/字体/text-rendering 均无效），改用与账号表 ago() 同口径的秒数。 */
+function usLiveAgo(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return s + ' 秒前';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + ' 分钟前';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + ' 小时前';
+  const d = Math.floor(h / 24);
+  return d === 1 ? '昨天' : d + ' 天前';
+}
+
+/* renderUsageLive 渲染「使用状态」卡（用量页第 2 格）：
+   绿灯=使用中（overview 里 in_flight>0 的账号，每行一个、各带呼吸灯）；
+   黄灯=空闲（取 token_usage.last_used_at 最近的账号 + 空闲时长）。
+   名字/时间完整显示，格子放不下自然折行；overview 拉不到时灰灯「—」。 */
+function renderUsageLive(ov) {
+  // 卡片是随 usStats 一起渲染的，这里从容器内定位：id 只在渲染产物里出现，
+  // 不能走顶层 $() 直取（否则静态 id 校验会认为 index.html 缺这个 id）。
+  const stats = $('usStats');
+  const host = stats && stats.querySelector ? stats.querySelector('#usLive') : null;
+  if (!host) return;
+  let html = '<span class="lamp off"></span><span>—</span>';
+  const accounts = (ov && ov.accounts) || [];
+  if (ov) {
+    const running = accounts.filter(a => (a.in_flight || 0) > 0);
+    if (running.length) {
+      html = running.map(a =>
+        '<span class="lamp on"></span><span>' + esc(a.nickname || String(a.uid).slice(0, 8)) + '</span>'
+      ).join('<br>');
+    } else {
+      let best = null;
+      accounts.forEach(a => {
+        const t = a.token_usage && a.token_usage.last_used_at;
+        const ts = t ? Date.parse(t) : NaN;
+        if (!Number.isNaN(ts) && (!best || ts > best.ts)) {
+          best = { ts: ts, name: a.nickname || String(a.uid).slice(0, 8) };
+        }
+      });
+      if (best) {
+        html = '<span class="lamp idle"></span><span>' + esc(best.name) + '</span>' +
+               '<span class="ltime">（' + esc(usLiveAgo(Date.now() - best.ts)) + '）</span>';
+      }
+    }
+  }
+  host.innerHTML = html;
+}
+
 async function loadUsage() {
   const q = trangeQuery('usRange', true);
   try {
     await warmUsageModelRates();
-    const d = await api('usage?' + q.toString());
+    const [d, ov] = await Promise.all([
+      api('usage?' + q.toString()),
+      api('overview').catch(() => null), // 使用状态卡数据源；单独失败不拖累用量刷新
+    ]);
     renderUsage(d);
+    renderUsageLive(ov);
   } catch (e) {
     // 失败时三块都要清干净：只改图表会留下上一次窗口的数字，看起来像"刷新成功"。
     usageData = null;

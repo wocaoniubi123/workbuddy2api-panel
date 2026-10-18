@@ -513,6 +513,8 @@ func (t *requestTrace) event(status int) reqlog.Event {
 		// 缓存命中/未命中（issue #92 同步）：hasCache 未置位时为零值，omitempty 省略。
 		e.CacheHitTokens = int64(s.cacheHit)
 		e.CacheMissTokens = int64(s.cacheMiss)
+		// 思考档位（最终生效值）：请求记录表新增「思考」列，用于排查「同模型为何快慢不同」。
+		e.Effort = s.effort
 	}
 	e.ClientIP = t.clientIP
 	e.UserAgent = t.userAgent

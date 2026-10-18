@@ -84,6 +84,8 @@ type Event struct {
 	CacheMissTokens int64  `json:"cache_miss_tokens,omitempty"`
 	ClientIP        string `json:"client_ip,omitempty"`
 	UserAgent       string `json:"user_agent,omitempty"`
+	// Effort 最终生效的思考档位（降级 / 补默认后）；空 = 未知（客户端未携带 reasoning_effort）。
+	Effort string `json:"effort,omitempty"`
 }
 
 // Filter 用于从归档中筛选最近记录。字符串字段一律「包含」匹配（大小写不敏感），

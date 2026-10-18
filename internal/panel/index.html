@@ -622,6 +622,16 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
     box-shadow: var(--shadow); padding: 12px 17px; max-height: 430px; overflow: auto; }
   #expBox .pad:hover .exp-pop { display: block; }
 
+  /* 「使用状态」卡（用量页第 2 格）：多号逐行 + 呼吸灯（使用中绿 / 空闲黄 / 未知灰）。 */
+  #usLive { line-height: 1.55; }
+  #usLive .lamp { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 6px; vertical-align: 0; background: var(--ink-3); }
+  #usLive .lamp.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); animation: usPulse 1.6s ease-in-out infinite; }
+  #usLive .lamp.idle { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+  #usLive .lamp.off { background: var(--ink-3); animation: none; }
+  #usLive .ltime { color: var(--ink-3); font-size: 11px; }
+  @keyframes usPulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+
 </style>
 </head>
 <body>
@@ -1245,7 +1255,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <thead><tr>
               <th>时间</th><th>结果</th><th>模型</th><th>账号</th>
               <th>来源 IP</th><th>User-Agent</th>
-              <th class="num">耗时</th><th class="num">Token</th><th class="num">积分</th><th>请求 ID</th>
+              <th class="num">耗时</th><th class="num">Token</th><th class="num">积分</th><th>请求 ID</th><th>思考</th>
             </tr></thead>
             <tbody id="reqBody"></tbody>
           </table>
