@@ -862,6 +862,24 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
 
       <div class="box">
         <header>
+          <h3>积分收入（新增）</h3>
+          <span class="grow"></span>
+          <span class="note">每笔 = 积分包「发放时间 + 面额」 · 今日 = 本地 0 点起 · 仅含未过期包（≈近 31 天）</span>
+          <button class="xs" id="btnPkIncome" title="展开 / 收起每个账号的明细">展开 ▾</button>
+        </header>
+        <div class="tbl-wrap" style="padding: 0 17px 17px;">
+          <table class="acc">
+            <thead><tr>
+              <th>账号</th>
+              <th class="num">今日</th><th class="num">三天内</th><th class="num">一周内</th><th class="num">一个月内</th>
+            </tr></thead>
+            <tbody id="pkIncomeBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="box">
+        <header>
           <h3>账号对比</h3>
           <span class="grow"></span>
           <span class="note" id="pkNote">—</span>

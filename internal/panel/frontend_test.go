@@ -1314,6 +1314,54 @@ vm.runInContext('let queueTimer = null, lastQueueSeq = 0; let taskCenterOwner = 
 	}
 }
 
+// 积分收入四窗口聚合：今日=本地 0 点起、3/7/30 天滚动（含今日）；缺发放时间的包
+// 不进任何窗口；行按「一个月内」降序、合计为各列加总。
+func TestAppJSPkIncomeAgg(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; pk income test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function pkIncomeAgg');
+const end = src.indexOf('function pkIncomeToggle');
+if (start < 0 || end < 0) throw new Error('pkIncomeAgg not found');
+const ctx = { Date, Number, String, Array };
+vm.createContext(ctx);
+vm.runInContext(src.slice(start, end) + '\nthis.pkIncomeAgg=pkIncomeAgg;', ctx);
+const now = new Date(2026, 9, 1, 12, 0, 0).getTime();
+const at = (m, d, h) => new Date(2026, m, d, h, 0, 0).toISOString();
+const d = { accounts: [
+  { uid: 'aaaa1111bbbb', nickname: '甲', realm: 'cn', packages: [
+    { created_at: at(9, 1, 8), size: 100 },
+    { created_at: at(8, 30, 8), size: 50 },
+    { created_at: at(8, 28, 8), size: 20 },
+    { created_at: at(8, 10, 8), size: 7 },
+    { size: 999 },
+  ]},
+  { uid: 'cccc2222dddd', packages: [ { created_at: at(9, 1, 0), size: 300 } ] },
+]};
+const r = ctx.pkIncomeAgg(d, now);
+process.stdout.write(JSON.stringify({ rows: r.rows.map(x => [x.name, x.t]), tot: r.tot }));`
+	f, err := os.CreateTemp(t.TempDir(), "pk-income-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("pk income node test failed: %v\n%s", err, out)
+	}
+	const want = `{"rows":[["cccc2222",[300,300,300,300]],["甲",[100,150,170,177]]],"tot":[400,450,470,477]}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("pk income=%s want %s", out, want)
+	}
+}
+
 // 积分构成「按需拉取」（移植上游 8391a05）：packages 是逐账号实时查上游，切进视图就打一次
 // 会在账号多时既慢又压上游。断言四件事：冷缓存才打上游、热缓存直接渲染并标注数据年龄、
 // 「刷新」按钮始终实时查（且不依赖事件对象真值）、失败不污染缓存（下次仍会重试）。
@@ -1330,7 +1378,7 @@ if (start < 0) throw new Error('packages cache not found in app.js');
 let fakeNow = 1700000000000;
 class FakeDate extends Date { static now() { return fakeNow; } }
 const els = {}, calls = [], rendered = [];
-const el = (id) => (els[id] = els[id] || { textContent: '', innerHTML: '' });
+const el = (id) => (els[id] = els[id] || { textContent: '', innerHTML: '', addEventListener() {} });
 let failNext = false;
 const ctx = {
   Date: FakeDate, Math, JSON, Promise, Number, String,

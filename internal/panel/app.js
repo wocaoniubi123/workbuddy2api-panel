@@ -3165,9 +3165,68 @@ let lastPackages = null, lastPackagesAt = 0, lastPkLimit = 0;
 // 「点检查还是 401」的观感就是这么来的。
 function invalidatePackages() { lastPackages = null; lastPackagesAt = 0; }
 
+/* ── 积分收入（新增）：默认折叠一行「合计」，展开看每个账号 ────────────
+   口径：每笔新增 = 一个积分包的「发放时间(created_at) + 面额(size)」；
+   今日 = 本地 0 点起；三天内/一周内/一个月内 = 现在往前滚动 3/7/30×24 小时（含今日）。
+   窗口受接口限制：只含未过期包（≈近 31 天），更早的自然查不到。
+   包名只有 3 大类，无法区分具体来源（签到/任务/抽奖），此表为纯"新增金额"口径。 */
+let pkIncomeOpen = false;
+
+/* pkIncomeAgg 四窗口聚合（纯函数，便于切片测试）：返回按「一个月内」降序的行与合计。 */
+function pkIncomeAgg(d, now) {
+  const mid = new Date(now);
+  mid.setHours(0, 0, 0, 0);
+  const t0 = mid.getTime();
+  const rows = ((d && d.accounts) || []).map(a => {
+    const r = { name: a.nickname || String(a.uid).slice(0, 8), realm: a.realm || '', t: [0, 0, 0, 0] };
+    (a.packages || []).forEach(p => {
+      const ts = p.created_at ? Date.parse(p.created_at) : NaN;
+      if (!Number.isFinite(ts)) return; // 上游没给发放时间的包不进任何窗口（不伪造）
+      const sz = Number(p.size || 0);
+      if (ts >= t0) r.t[0] += sz;
+      if (ts >= now - 3 * 864e5) r.t[1] += sz;
+      if (ts >= now - 7 * 864e5) r.t[2] += sz;
+      if (ts >= now - 30 * 864e5) r.t[3] += sz;
+    });
+    return r;
+  }).sort((x, y) => y.t[3] - x.t[3]);
+  const tot = [0, 0, 0, 0];
+  rows.forEach(r => r.t.forEach((v, i) => { tot[i] += v; }));
+  return { rows, tot };
+}
+
+function pkIncomeToggle() {
+  pkIncomeOpen = !pkIncomeOpen;
+  document.querySelectorAll('.pkIncAcct').forEach(tr => tr.hidden = !pkIncomeOpen);
+  const b = $('btnPkIncome');
+  if (b) b.textContent = pkIncomeOpen ? '收起 ▴' : '展开 ▾';
+}
+function renderPkIncome(d) {
+  const body = $('pkIncomeBody');
+  if (!body) return;
+  const { rows, tot } = pkIncomeAgg(d, Date.now());
+  const cell = v => v
+    ? '<td class="num" style="color:var(--credit)">+' + Number(v).toLocaleString('en-US') + '</td>'
+    : '<td class="num" style="color:var(--ink-3)">0</td>';
+  body.innerHTML = rows.map(r =>
+    '<tr class="pkIncAcct"' + (pkIncomeOpen ? '' : ' hidden') + '><td>' + esc(r.name) +
+    (r.realm ? '<div class="note">' + esc(r.realm) + '</div>' : '') + '</td>' +
+    r.t.map(cell).join('') + '</tr>'
+  ).join('') +
+    '<tr id="pkIncTotal" style="background:var(--surface-2);font-weight:600;cursor:pointer" title="点击展开每个账号">' +
+    '<td>合计（' + rows.length + ' 个号）</td>' + tot.map(cell).join('') + '</tr>';
+  const b = $('btnPkIncome');
+  if (b) b.textContent = pkIncomeOpen ? '收起 ▴' : '展开 ▾';
+}
+if ($('btnPkIncome')) $('btnPkIncome').onclick = pkIncomeToggle;
+if ($('pkIncomeBody')) $('pkIncomeBody').addEventListener('click', ev => {
+  if (ev.target.closest('#pkIncTotal')) pkIncomeToggle();
+});
+
 async function loadPackages(force) {
   if (!force && lastPackages) {
     renderPackages(lastPackages, lastPkLimit);
+    renderPkIncome(lastPackages);
     const ageMin = Math.floor((Date.now() - lastPackagesAt) / 60000);
     if (ageMin > 0) $('pkNote').textContent = lastPackages.accounts.length + ' 个账号 · ' + ageMin + ' 分钟前的数据，点「刷新」更新';
     return;
@@ -3184,9 +3243,12 @@ async function loadPackages(force) {
     lastPackagesAt = Date.now();
     lastPkLimit = pkDetailLimit(c && c.config);
     renderPackages(d, lastPkLimit);
+    renderPkIncome(d);
   } catch (e) {
     $('pkSummary').innerHTML = '<div class="empty">读取失败：' + esc(e.message) + '</div>';
     $('pkExpiry').innerHTML = '<div class="pk-expiry-empty">读取失败：' + esc(e.message) + '</div>';
+    const incBody = $('pkIncomeBody');
+    if (incBody) incBody.innerHTML = '<tr><td colspan="5" class="empty">读取失败：' + esc(e.message) + '</td></tr>';
   }
 }
 
