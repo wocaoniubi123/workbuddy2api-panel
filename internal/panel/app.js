@@ -392,8 +392,19 @@ setTimeout(() => {
 }, 0);
 
 /* ── 账号池 ───────────────────────────────────────────────────────── */
+/* accSortForDisplay 账号池展示顺序：积分从大到小；禁用账号垫底（禁用=不参与选号，
+   压箱底不干扰判断）。返回副本，不改调用方持有的原数组（筛选/统计还用同一份）。 */
+function accSortForDisplay(list) {
+  return (list || []).slice().sort((x, y) => {
+    const dx = x.disabled ? 1 : 0, dy = y.disabled ? 1 : 0;
+    if (dx !== dy) return dx - dy;
+    return (Number(y.credits) || 0) - (Number(x.credits) || 0);
+  });
+}
+
 function renderAccounts(list) {
   const tb = $('accBody');
+  list = accSortForDisplay(list);
   if (!list.length) {
     tb.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号</div></td></tr>';
     return;
@@ -1052,7 +1063,7 @@ function reqOutcomeTag(e) {
 function reqTokenCell(e) {
   const total = Number(e && e.total_tokens || 0) ||
     (Number(e && e.prompt_tokens || 0) + Number(e && e.completion_tokens || 0));
-  return total ? fmtTok(total) : '—';
+  return total ? fmtTokShort(total) : '—';
 }
 
 function reqCreditCell(e) {
@@ -1136,7 +1147,7 @@ function requestLogText(e) {
     e && e.client_ip || '—',
     e && e.user_agent || '—',
     fmtMs(e && e.duration_ms),
-    fmtTok(token) + ' tok',
+    fmtTokShort(token) + ' tok',
     credit,
     cacheRateText(e && e.cache_hit_tokens, e && e.cache_miss_tokens) === '—' ? '' : '命中 ' + cacheRateText(e && e.cache_hit_tokens, e && e.cache_miss_tokens),
     e && e.request_id || '—',
@@ -1968,6 +1979,15 @@ function reattachQueueView() {
 
 function fmtTok(n) {
   n = Number(n || 0);
+  // 全量显示（取消 M/K/B 缩写）：≥1 亿收两位小数用「亿」，其余千分位。
+  // 用量页/图表保留这套；窄表格与请求日志行用下面的 fmtTokShort（口径不同，刻意分开）。
+  if (n >= 1e8) return (n / 1e8).toFixed(2) + '亿';
+  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+/* fmtTokShort 千/百万/十亿缩写（如 2.3k / 1.20M / 2.00B）：请求日志行、图表刻度等
+   紧凑展示专用（列宽/坐标轴放不下全量数字）。 */
+function fmtTokShort(n) {
+  n = Number(n || 0);
   if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
   if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
@@ -2327,8 +2347,8 @@ function renderUsageChart(series) {
   const peak = pts.reduce((a, b) => (b.tt > a.tt ? b : a), pts[0]);
   const avg = pts.reduce((s, p) => s + p.tt, 0) / pts.length;
   $('usChartNote').textContent =
-    pts.length + ' 个点 · 峰值 ' + fmtTok(peak.tt) + ' @ ' + fmtTokTimeLabel(peak) +
-    ' · 均值 ' + fmtTok(avg);
+    pts.length + ' 个点 · 峰值 ' + fmtTokShort(peak.tt) + ' @ ' + fmtTokTimeLabel(peak) +
+    ' · 均值 ' + fmtTokShort(avg);
 
   // 柱宽取「最小真实间隔」的 70%，并夹在合理区间内——窗口拉到 30 天时柱子会
   // 变细，但不会细到看不见。
@@ -2364,7 +2384,7 @@ function renderUsageChart(series) {
     out += '<line class="gl" x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + (W - PR) +
            '" y2="' + y.toFixed(1) + '"/>';
     out += '<text class="tk" x="' + (PL - 6) + '" y="' + (y + 3.5).toFixed(1) +
-           '" text-anchor="end">' + fmtTok(max * i / 4) + '</text>';
+           '" text-anchor="end">' + fmtTokShort(max * i / 4) + '</text>';
   }
 
   // 均值参考线：一眼看出"这根是不是异常高"，比只给刻度省心。
@@ -2374,7 +2394,7 @@ function renderUsageChart(series) {
     out += '<line class="avg" x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + (W - PR) +
            '" y2="' + y.toFixed(1) + '"/>';
     out += '<text class="tk-avg" x="' + (PL + 5) + '" y="' + (y - 4).toFixed(1) +
-           '" text-anchor="start">均值 ' + fmtTok(avg) + '</text>';
+           '" text-anchor="start">均值 ' + fmtTokShort(avg) + '</text>';
   }
 
   // 柱子
@@ -2392,8 +2412,8 @@ function renderUsageChart(series) {
     //     把它当整图的说明，于是**所有柱子都显示最后一条数据**（issue #128 的
     //     「细节数据好像所有柱状图都相同」）。
     //   - 两个 rect（prompt/completion 堆叠）共用一个 <title>，悬停任一段都是同一份明细。
-    out += '<g><title>' + esc(p.raw) + '  ' + fmtTok(p.pt) + ' prompt / ' +
-           fmtTok(p.ct) + ' completion / ' + p.req + ' 次</title>';
+    out += '<g><title>' + esc(p.raw) + '  ' + fmtTokShort(p.pt) + ' prompt / ' +
+           fmtTokShort(p.ct) + ' completion / ' + p.req + ' 次</title>';
     if (hP > 0) out += '<rect class="usbar" x="' + x.toFixed(2) + '" y="' + (yBase - hP).toFixed(2) +
       '" width="' + bw.toFixed(2) + '" height="' + hP.toFixed(2) +
       '" fill="url(#usGradP)"' + (hC > 0 ? '' : ' rx="1.5"') + '/>';
@@ -2410,7 +2430,7 @@ function renderUsageChart(series) {
     const anchor = px > W - PR - 90 ? 'end' : 'middle';
     out += '<text class="tk-peak" x="' + Math.max(PL, Math.min(W - PR, px)).toFixed(1) +
            '" y="' + Math.max(10, py - 5).toFixed(1) + '" text-anchor="' + anchor + '">' +
-           '峰值 ' + fmtTok(peak.tt) + '</text>';
+           '峰值 ' + fmtTokShort(peak.tt) + '</text>';
   }
 
   // x 轴基线画在柱子之后，避免压在柱底

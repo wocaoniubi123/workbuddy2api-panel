@@ -1367,6 +1367,56 @@ process.stdout.write(JSON.stringify({ rows: r.rows.map(x => [x.name, x.t]), tot:
 	}
 }
 
+// 账号池展示顺序：积分从大到小，禁用账号一律垫底；不改入参数组（调用方还要用原始顺序）。
+// 为什么钉：账号池是运维第一屏，顺序若按 state.json 写入序/uid 序，余额要靠逐个读数字；
+// 禁用号混在中间还会被误当成可用号处理。
+func TestAppJSAccSortForDisplay(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; acc sort test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function accSortForDisplay');
+const end = src.indexOf('function renderAccounts');
+if (start < 0 || end < 0) throw new Error('accSortForDisplay not found');
+const ctx = { Number, String, Array };
+vm.createContext(ctx);
+vm.runInContext(src.slice(start, end) + '\nthis.accSortForDisplay=accSortForDisplay;', ctx);
+const input = [
+  { uid: 'low',      credits: 5,   disabled: false },
+  { uid: 'offHigh',  credits: 999, disabled: true  },
+  { uid: 'high',     credits: 800, disabled: false },
+  { uid: 'zero',     credits: 0,   disabled: false },
+  { uid: 'offLow',   credits: 1,   disabled: true  },
+  { uid: 'nullCred', credits: null, disabled: false },
+];
+const before = input.map(x => x.uid).join(',');
+const out = ctx.accSortForDisplay(input);
+process.stdout.write(JSON.stringify({
+  order: out.map(x => x.uid),
+  untouched: input.map(x => x.uid).join(',') === before,
+}));`
+	f, err := os.CreateTemp(t.TempDir(), "acc-sort-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("acc sort node test failed: %v\n%s", err, out)
+	}
+	// 积分降序：high(800) → low(5) → zero(0) → nullCred(null 当 0)；禁用垫底且内部仍降序。
+	want := `{"order":["high","low","zero","nullCred","offHigh","offLow"],"untouched":true}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("账号池排序=%s want %s", out, want)
+	}
+}
+
 // 积分构成「按需拉取」（移植上游 8391a05）：packages 是逐账号实时查上游，切进视图就打一次
 // 会在账号多时既慢又压上游。断言四件事：冷缓存才打上游、热缓存直接渲染并标注数据年龄、
 // 「刷新」按钮始终实时查（且不依赖事件对象真值）、失败不污染缓存（下次仍会重试）。
