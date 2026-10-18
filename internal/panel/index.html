@@ -622,15 +622,18 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
     box-shadow: var(--shadow); padding: 12px 17px; max-height: 430px; overflow: auto; }
   #expBox .pad:hover .exp-pop { display: block; }
 
-  /* 「使用状态」卡（用量页第 2 格）：多号逐行 + 呼吸灯（使用中绿 / 空闲黄 / 未知灰）。 */
-  #usLive { line-height: 1.55; }
+  /* 用量页「使用状态」卡（第 2 格）：呼吸灯 + 名字（+空闲时长）。
+     绿灯=使用中；黄灯=空闲·最近；灰灯=数据不可达。名字/时间完整，放不下自然折行。
+     字族必须显式回到正文 --sans：挂在 .kpi .v 下会继承等宽栈，等宽栈无中文字形 →
+     逐字回退成两种字体，小字号下笔画糊在一起像叠字（旧网关踩过）。 */
+  #usLive { font-size: 11.5px; line-height: 1.7; font-weight: 500; font-family: var(--sans); color: var(--ink);
+    white-space: normal; overflow-wrap: break-word; }
   #usLive .lamp { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
-    margin-right: 6px; vertical-align: 0; background: var(--ink-3); }
-  #usLive .lamp.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); animation: usPulse 1.6s ease-in-out infinite; }
+    margin-right: 5px; vertical-align: .5px; animation: usPulse 1.6s ease-in-out infinite; }
+  #usLive .lamp.on { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
   #usLive .lamp.idle { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
   #usLive .lamp.off { background: var(--ink-3); animation: none; }
-  #usLive .ltime { color: var(--ink-3); font-size: 11px; }
-  @keyframes usPulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+  @keyframes usPulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
 
 </style>
 </head>
