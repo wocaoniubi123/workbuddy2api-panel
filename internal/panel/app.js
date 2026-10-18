@@ -1070,17 +1070,6 @@ function reqTokenCell(e) {
   return total ? fmtTokShort(total) : '—';
 }
 
-/* 缓存命中率（对齐旧网关 cacheRateCell）：颜色即健康度——≥90% 绿 / 80–90% 黄 / <80% 红，
-   样本不足灰。title 带命中/未命中绝对量，供逐项核对。 */
-function cacheRateCell(hit, miss) {
-  const h = Number(hit || 0), m = Number(miss || 0), total = h + m;
-  if (!total) return '<span class="muted">—</span>';
-  const pct = h / total * 100;
-  const color = pct >= 90 ? 'var(--ok)' : (pct >= 80 ? 'var(--warn)' : 'var(--bad)');
-  const txt = trimFixed(pct.toFixed(1)) + '%';
-  return '<span style="color:' + color + '" title="命中 ' + fmtTok(h) + ' / 未命中 ' + fmtTok(m) + ' tok">' + txt + '</span>';
-}
-
 function reqCreditCell(e) {
   if (!e || !e.credit_known) return '<span class="muted">—</span>';
   const v = Number(e.credit);
@@ -2082,8 +2071,8 @@ function usRow(name, sub, a, mid, withPerf, nameHtml) {
     '<td class="num">' + fmtTok(a.requests) + '</td>' +
     '<td class="num">' + (a.errors ? '<span style="color:var(--warn)">' + fmtTok(a.errors) + '</span>' : '—') + '</td>' +
     '<td class="num">' + fmtTok(a.prompt_tokens) + '</td>' +
-    '<td class="num">' + fmtHit(a) + '</td>' +
     '<td class="num">' + fmtTok(a.completion_tokens) + '</td>' +
+    '<td class="num">' + fmtHit(a) + '</td>' +
     '<td class="num">' + fmtTok(a.total_tokens) +
       usMixBar(a.prompt_tokens, a.completion_tokens, a.total_tokens) + '</td>' +
     (withPerf
@@ -2097,9 +2086,9 @@ function usRow(name, sub, a, mid, withPerf, nameHtml) {
    账号 / 模型 / 域三张表此前各自占一个 box，页面纵向拉得很长且表头结构几乎一样。
    现在合成一个 box：表头由维度定义生成，行渲染复用 usRow，切换零请求。 */
 const US_DIMS = {
-  account: { key: 'by_account', title: '账号', withRealm: true, withPerf: true, span: 10 },
-  model: { key: 'by_model', title: '模型', withRealm: false, withPerf: false, span: 7 },
-  realm: { key: 'by_realm', title: 'realm', withRealm: false, withPerf: false, span: 7 },
+  account: { key: 'by_account', title: '账号', withRealm: true, withPerf: true, span: 11 },
+  model: { key: 'by_model', title: '模型', withRealm: false, withPerf: false, span: 8 },
+  realm: { key: 'by_realm', title: 'realm', withRealm: false, withPerf: false, span: 8 },
 };
 
 // usSortRows 按当前排序字段降序（默认合计 Token，最大者最相关）。
@@ -2119,7 +2108,7 @@ function usDimHead(dim) {
   return '<tr><th class="mark" aria-hidden="true"></th><th>' + esc(m.title) + '</th>' +
     (m.withRealm ? '<th>域</th>' : '') +
     '<th class="num">请求</th><th class="num">失败</th>' +
-    '<th class="num">Prompt</th><th class="num">Completion</th><th class="num">合计</th>' +
+    '<th class="num">Prompt</th><th class="num">Completion</th><th class="num">命中率</th><th class="num">合计</th>' +
     (m.withPerf ? '<th class="num">均延迟</th><th class="num">均速率</th>' : '') +
     '</tr>';
 }
