@@ -723,3 +723,73 @@ func accountTaskUIDDisabled(p *pool.Pool, uid string) bool {
 	}
 	return true
 }
+
+// persistQueueResults 把手动队列（「执行全部待办」）的结果并入 taskjobs，让「刷新进度」能看到。
+//
+// 为什么需要：那个视图读的是 task-jobs.json，而队列结果此前只留在内存里（q.items），
+// 跑完页面一刷新就没了、重启更是全丢——于是"执行了但看不到"。
+//
+// 只追加一份结果记录，不改任何执行路径：队列怎么跑、进度怎么显示都不变。
+// 账号正被后台任务占用时跳过，避免覆盖那边的实时进度。
+func (p *Panel) persistQueueResults(items []queueItem, startedAt time.Time) {
+	m := p.getTaskJobManager()
+	if m == nil {
+		return
+	}
+	byUID := make(map[string][]queueItem)
+	for _, it := range items {
+		if it.Kind != "growth" {
+			continue // 账号级占位（扫描失败/跳过）不是任务结果
+		}
+		byUID[it.UID] = append(byUID[it.UID], it)
+	}
+	if len(byUID) == 0 {
+		return
+	}
+	now := time.Now().UTC()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return
+	}
+	for uid, its := range byUID {
+		if _, active := m.active[uid]; active {
+			continue // 后台任务在跑：那边的进度更实时，别覆盖
+		}
+		job, ok := m.jobs[uid]
+		if !ok || job.Status == "running" || job.Status == "pending" {
+			job = TaskJob{UID: uid, Nickname: its[0].Nickname}
+		}
+		if job.ID == "" {
+			id, err := newTaskJobID()
+			if err != nil {
+				continue
+			}
+			job.ID = id
+		}
+		job.Trigger = "manual"
+		job.Status = "finished"
+		job.Message = "手动执行全部待办"
+		job.Error = ""
+		job.CurrentTask = ""
+		job.StartedAt = startedAt.UTC()
+		job.UpdatedAt = now
+		job.FinishedAt = timePtr(now)
+		job.Total = len(its)
+		job.Results = nil
+		for _, it := range its {
+			out := autoTaskOutcome{
+				Status:  it.Status,
+				Message: it.Message,
+				Credit:  it.Credit,
+				Energy:  it.Energy,
+			}
+			upsertTaskJobResult(&job, it.Code, out.resultMap(autoActionFor(it.Code)))
+		}
+		job.Completed = countCompletedTaskResults(job.Results)
+		m.jobs[uid] = job
+	}
+	if err := m.persistLocked(); err != nil {
+		log.Printf("panel: 保存手动队列结果: %v", err)
+	}
+}

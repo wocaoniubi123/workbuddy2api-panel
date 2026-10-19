@@ -411,8 +411,10 @@ func (p *Panel) runQueueItems(accts []queueAccount, items []queueItem, concurren
 		q.mu.Lock()
 		q.running = false
 		sum := q.summaryLocked(time.Since(startedAt)) // 锁内取：避免下一轮启动后误统计新 items
+		done := append([]queueItem(nil), q.items...)  // 快照：供写入 taskjobs（让「刷新进度」能看到）
 		q.mu.Unlock()
 		log.Printf("panel: 队列执行结束：%s", sum)
+		p.persistQueueResults(done, startedAt)
 		if notify {
 			p.notifyQueueSummary(sum)
 		}
