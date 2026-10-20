@@ -1,30 +1,92 @@
-# AutoBot.yml —— 上游吸收的声明式配置。
-#
-# 本文件只是契约：谁来读它见 .github/workflows/autobot.yml（schedule + workflow_dispatch）。
-# 改行为只改这里，不用改代码。
+# AutoBot.yml —— 参考仓库清单与策略声明。
+# 谁来读它见 .github/workflows/autobot.yml；改行为只改这里，不用改代码。
 
-version: 1
+version: 2
 
 upstream:
-  repo: linguo2625469/workbuddy2api-panel
-  remote: upstream          # 只在 CI 里临时添加，不写进本地 remote
-  # 取最近 N 条未处理的提交。刻意按条数而不是按天数：「N 天前」在上游安静的周里
-  # 会恒为空（实测上游最后一条非 merge 提交是 10-11，7 天窗口刚好把它排除），
-  # 白跑一轮还看不出是配置还是故障。已处理过的靠分支名去重，不需要状态文件。
-  limit: 30
+  # 逐个 clone 下来交给 agent 分析的对象。第一个是本仓的上游 fork，其余是参考实现。
+  repos:
+    - linguo2625469/workbuddy2api-panel
+    - ardeyouxipianyi/workbuddy2api-hub
+    - yuechuya/WorkBuddy2API-Gateway
+    - HUIdada1/AgentHub
+    - 3155498108/workbuddy-one
+    - sheng-du0521/workbuddy2api
+    - OHCJ099/BuddyHub
+    - hj01857655/WorkBuddy2api
+    - Agent2API/agent2api
+    - syan-anan/wb-syan
+    - JackAIStudio/dsh-workbuddy-dual
+    - smart-open/TraeWorkAssistant
+    - deltrivx/AutoBuddy
+    - techysy/CreditDaddy
+    - spdw666/multi-agent-checkin-dsh
+    - 1557335006/workbuddy-checkin-tool
+    - Yhx888/dsh-free-egg-credits
+    - Costben/workbuddy2api
+    - zr987459/workbuddy-app
+    - chenpiyanghappy/dsh-buddy-suite
+    - bhh3349/workbuddy2api-prime
+    - dhdbvcg/dsh-workbuddy-console
+    - chengzhi-c/pi-desktop-wtq-pool
+    - chengzhi-c/dsh-wtq-pool
+    - liberation8/hermes-workbuddy-provider
+    - Misaka10091/workbuddy2api-panel
+    - xibai6668/Android-AI-gateway
+    - pandarick916/workbuddy_checkin
+    - 2861292267/DSH-Official-WorkBuddy-Credit-Proxy
+    - ithtelab/workbuddy-manager
+    - caigee-cmd/cli2api
+    - 241793/workbuddy2API
+    - majiabin2020/WorkMami
+    - FireOpalus/dsh-workbuddy2api
+    - NextAgentX/qoder-trae-workbuddy-switch
+    - sofs2005/w2a
+    - dingminhua/dsh-connect-workbuddy
+    - newtypepan12-svg/workbuddy-qiandao
+    - pkqzzt/workbuddy2api-panel-plus
+    - rcwowhoo/workbuddy-checkin
+    - lehuaner/SSHMonitor
+    - Faide-cyber/dsh-workbuddy
+    - wefewe/workbuddy2api
+    - ChaYeWuu/dsh-hyperworkbuddy
+    - wicm84266964/Buddy2api
+    - xiaofan6ya/workbuddy2api
+    - HXX-ita/workbuddy-checkin
+    - thintsing/agent-checkin
+    - stevenwang288/WorkBuddy-Daily
+    - study-yang/workbuddy2codex
+    - gray0128/pi-workbuddy-connect
+    - autumnsentiment/workbuddy-helper
+    - GeekFong/traework-checkin-assistant
+    - jerry9692/dsh-workbuddy2api-panel
+    - babygoton/WorkDaddy
+    - AndroidSix/dsh-multi-router
+    - xbmaxx/cli2openai
+    - csszyft/wb2api
+    - PBY-CMYK/workbuddy-daily
+    - interli3/workbuddy-cloud-worker
+    - lxpkwwz/ql_scripts
+    - luoxh8/workbuddy-connect
+    - maiphucgiang/codebuddy2api
+    - a1007479270/aidaka
+    - fancylear/dsh-workbuddy-credits
+    - Libra1337/Reso2api
+    - TanTaolov/workbuddy2api-panel
+    - jin66god/workbuddy2api-panel
+
+  # 每片 4 个仓串行：串行是硬要求（免费档 10 RPM 共享一个池），
+  # 放大每片只为少付 setup 开销（每片一次 pip install ≈2 分钟）
+  shard_size: 4
+  # 每轮最多真正落地几条（每条要起 agent 写代码、跑测试、开 PR）
+  land_max: 1
 
 policy:
   base: main
   branch_prefix: autobot/
   label: autobot
-  max_prs_per_run: 1        # 一次最多开一个 PR：宁可少，不可轰炸
-  # 允许改测试：不允许的话「有没有回归」就无法证明。
-  allow_test_changes: true
-  # LLM 的职责边界：只做「挑哪条」，不写代码。代码由 git cherry-pick 搬，
-  # 由 go test 判定能不能留——让模型凭空生成 Go 补丁的成功率不够，且无法验证。
-  mode: cherry-pick
 
-  # 硬禁项。这是给执行者划的线，不是提示词里的软约束：
+  # 硬禁项：这是给执行者的线，不是提示词里的软约束
   never:
     - push_main
     - merge

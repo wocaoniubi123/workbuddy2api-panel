@@ -16,6 +16,7 @@ let mdFilter = { q: '', realm: '', cap: '', effort: '', promo: '', sort: 'defaul
    （表现为点「展开」后什么都不点又自动收起）。键 = tbody id。 */
 const restOpen = Object.create(null);
 let mdAll = [], mdProbes = {}, mdProbeOf = () => undefined;
+let mdLocks = [], mdRecent = [];
 let reqFilter = { q: '', outcome: '' };
 let reqEntries = [];
 let usDim = 'account', usCreditDim = 'account', usSort = 'total';
@@ -460,6 +461,9 @@ function renderAccounts(list) {
         '  ' + c.model + '：' + (c.cost_per_1k <= 0 ? '免费' : c.cost_per_1k)).join('\n');
     }
     const frozen = s.disabled || cool > 0;
+    // 无个人成长体系的账号（企业版 / 静态 API Key）：签到与成长任务端点在上游对自己
+    // 恒失败，按钮点了只会报错，故不渲染；「额度」按钮走企业口径端点照常可用。
+    const personal = !(s.enterprise || s.api_key);
     const tu = s.token_usage || {};
     const req = tu.request_count || 0;
     const totalTok = formatTokenCount(tu.total_tokens);
@@ -469,7 +473,7 @@ function renderAccounts(list) {
     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
     return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
-      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
+      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + (s.api_key ? ' <span class="realm-tag">API Key</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
       '<td>' + tag + note + rateLimits + '</td>' +
       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
@@ -482,17 +486,17 @@ function renderAccounts(list) {
       '</span></td>' +
       '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
       '<td class="acts">' +
-        // 企业版无个人成长体系（签到 400「企业账号不支持该操作」/ 成长任务 403）：
-        // 不渲染「签到」「任务」按钮，只留「额度」——点它走 /balance，企业额度由
-        // upstream 的 get-enterprise-user-usage 口径填充。
-        (s.enterprise ? '' :
-          '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>') +
+        // 无个人成长体系的账号（企业版 / 静态 API Key）不渲染「签到」「任务」：前者
+        // 上游 400「企业账号不支持该操作」，后者 403 growth-only；只留「额度」，点它走
+        // /balance，额度由 upstream 的企业口径端点（get-enterprise-user-usage）填充。
+        (personal ?
+          '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>' : '') +
         '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>' +
-        (s.enterprise ? '' :
-          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>') +
+        (personal ?
+          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>' : '') +
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
-                            : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (s.enterprise ? '退出选号，但照常保活 / 刷新额度' : '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额') + '">暂停选号</button>')) +
+                            : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (personal ? '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额' : '退出选号，但照常保活 / 刷新额度') + '">暂停选号</button>')) +
         (s.disabled ? '' : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>') +
         '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>' +
       '</td></tr>';
@@ -716,12 +720,20 @@ async function loadModels(force) {
   const tb = $('mdBody');
   tb.innerHTML = '<tr><td colspan="7"><div class="empty">正在向上游查询…</div></td></tr>';
   try {
-    // 探测数据是可选增强：拉取失败不影响模型列表本身
+    // 探测、模型锁与最近请求都是本地可选增强：任一失败不影响模型目录本身。
+    // 可用性标签不额外发推理请求，只用模型锁和最近真实请求结果合成。
     // force=true（「重新获取」按钮）：带 refresh=1 让后端清掉 global 目录 1h 缓存，
     // 真正重新问一次上游，否则点多少次都是同一份缓存（issue #216 现象 3）。
-    const [d, pr] = await Promise.all([api('models' + (force ? '?refresh=1' : '')), api('model_probes').catch(() => ({}))]);
+    const [d, pr, st, rm] = await Promise.all([
+      api('models' + (force ? '?refresh=1' : '')),
+      api('model_probes').catch(() => ({})),
+      api('status').catch(() => ({})),
+      api('request_metrics').catch(() => ({})),
+    ]);
     mdAll = d.models || [];
     mdProbes = pr.probes || {};
+    mdLocks = Array.isArray(st.model_locks) ? st.model_locks : [];
+    mdRecent = Array.isArray(rm.recent) ? rm.recent : [];
     if (!mdAll.length) {
       tb.innerHTML = '<tr><td colspan="7"><div class="empty">上游未返回模型</div></td></tr>';
       $('mdCount').textContent = '';
@@ -801,6 +813,67 @@ function mdSortList(list, f) {
   return out;
 }
 
+// mdAvailabilityOf 合成 Global 模型当前可用性：模型锁优先于最近请求结果。
+// 只返回有真实本地证据的状态；目录中存在但从未请求过的模型标为“待验证”，
+// 避免把“上游列出了模型”误当成“当前账号有权限”。
+function mdAvailabilityOf(m, locks, recent) {
+  const id = String((m && m.id) || '');
+  if (!id.startsWith('global:')) return null;
+  locks = Array.isArray(locks) ? locks : mdLocks;
+  recent = Array.isArray(recent) ? recent : mdRecent;
+  const bare = id.slice('global:'.length);
+  const lock = locks.find(r => r && r.realm === 'global' && r.model === bare);
+  if (lock) {
+    const reason = String(lock.reason || '').trim();
+    const lower = reason.toLowerCase();
+    if (lock.state === 'partial') {
+      return { key: 'partial', label: '部分可用', cls: 'warn',
+        tip: '仍有 ' + Number(lock.servable || 0) + ' 个 global 账号可服务；已锁 ' + Number(lock.locked || 0) + ' 个' + (reason ? '；' + reason : '') };
+    }
+    if (lock.state === 'starved') {
+      return { key: 'starved', label: '账号暂不可用', cls: 'mute',
+        tip: '没有账号能服务该模型，但并非该模型自身被锁；请检查账号冷却/在途占用' };
+    }
+    if (lower.startsWith('11158') || lower.includes('not allowed for user type')) {
+      return { key: 'denied', label: '无权限', cls: 'bad',
+        tip: '当前 global 账号类型不支持该模型' + (reason ? '；' + reason : '') };
+    }
+    if (lower.startsWith('11102') || lower.includes('service info not found')) {
+      return { key: 'missing', label: '上游无此模型', cls: 'bad',
+        tip: '上游目录残留，实际请求返回模型不存在' + (reason ? '；' + reason : '') };
+    }
+    return { key: 'limited', label: '限流/不可用', cls: 'warn',
+      tip: '模型级冷却中' + (reason ? '；' + reason : '') };
+  }
+  const ev = recent.find(e => e && e.model === id);
+  if (ev) {
+    const status = Number(ev.status || 0);
+    const when = ev.time ? new Date(ev.time).toLocaleString('zh-CN', { hour12: false }) : '';
+    if (ev.outcome === 'success' || (status >= 200 && status < 300)) {
+      return { key: 'ok', label: '可用', cls: 'ok',
+        tip: '最近一次真实请求成功' + (when ? ' · ' + when : '') };
+    }
+    if (status === 429) {
+      return { key: 'rate', label: '限流', cls: 'warn',
+        tip: '最近一次请求被限流' + (when ? ' · ' + when : '') };
+    }
+    if (status >= 500) {
+      return { key: 'upstream', label: '上游错误', cls: 'bad',
+        tip: '最近一次请求上游错误 HTTP ' + status + (when ? ' · ' + when : '') };
+    }
+    return { key: 'failed', label: '最近失败', cls: 'bad',
+      tip: '最近一次请求失败 HTTP ' + (status || '—') + (when ? ' · ' + when : '') };
+  }
+  return { key: 'unknown', label: '待验证', cls: 'mute',
+    tip: '尚无模型锁或近期真实请求记录；目录存在不代表当前账号有权限' };
+}
+
+function mdAvailabilityTag(m) {
+  const av = mdAvailabilityOf(m);
+  if (!av) return '';
+  return ' <span class="tag ' + av.cls + ' md-avail" title="' + esc(av.tip) + '">' + esc(av.label) + '</span>';
+}
+
 // mdRowHtml 单个模型行（纯渲染，便于独立测试）。
 // 上游模型繁忙度（/v2/chat/busy）文案：只标需要避让的三档，idle/normal 不打扰。
 const BUSY_WORDS = { busy: '繁忙', congested: '拥堵', unavailable: '不可用' };
@@ -825,7 +898,7 @@ function mdRowHtml(m, pr) {
   }
   const capHtml = caps.length ? '<div class="id" style="margin-top:2px">' + caps.join(' ') + '</div>' : '';
   const tip = m.description ? ' title="' + esc(m.description) + '"' : '';
-  return '<tr><td class="mark" aria-hidden="true"><i></i></td><td class="who"' + tip + '><div class="nm">' + esc(m.id) + '</div><div class="id">' + esc(m.name || '') + '</div>' + capHtml + '</td>' +
+  return '<tr><td class="mark" aria-hidden="true"><i></i></td><td class="who"' + tip + '><div class="nm"><span class="mid">' + esc(m.id) + '</span>' + mdAvailabilityTag(m) + '</div><div class="id">' + esc(m.name || '') + '</div>' + capHtml + '</td>' +
     '<td class="num">' + rateCell(m) + '</td>' +
     '<td>' + (m.default_effort && !m.image_generation ? '<span class="tag ok">' + esc(m.default_effort) + '</span>' : '<span style="color:var(--ink-3)">—</span>') + '</td>' +
     '<td class="efs" style="white-space:normal">' + effs + '</td>' +
@@ -1211,6 +1284,7 @@ const CFG_MAP = {
   sanitize_blacklist_fingerprints: ['features', 'sanitize_blacklist_fingerprints'],
   session_sticky_enabled: ['session_sticky', 'enabled'],
   request_client_info: ['logging', 'request_client_info'],
+  models_hidden: ['models', 'hidden'],
 };
 /* 「覆盖型」文本字段：空串本身是有意义的取值（= 回落到内置默认），必须照发。
  *
@@ -1265,8 +1339,10 @@ function collectConfig() {
     else if (el.type === 'number') { v = el.value.trim() === '' ? undefined : Number(el.value); }
     else {
       const raw = el.value.trim();
+      // 逗号/空白分隔的列表字段：空 = 显式清空黑名单（空数组照发，否则删不掉条目）。
+      if (name === 'models_hidden') v = raw.split(/[,，\s]+/).filter(Boolean);
       // 覆盖型字段空串照发（见 CLEARABLE_CFG）；其余空 = 不下发。
-      if (raw === '') v = CLEARABLE_CFG.has(name) ? '' : undefined;
+      else if (raw === '') v = CLEARABLE_CFG.has(name) ? '' : undefined;
       else if (name.endsWith('_hours')) v = raw.split(/[,，\s]+/).filter(Boolean).map(Number);
       else v = raw;
     }
@@ -1345,14 +1421,20 @@ function openAdd() {
   $('addLoad').hidden = true; $('addReady').hidden = true;
   $('addDone').hidden = true; $('addErr').hidden = true;
   $('importDone').hidden = true; $('importErr').hidden = true;
+  $('apiKeyDone').hidden = true; $('apiKeyErr').hidden = true;
   $('btnCopyUrl').hidden = true; $('btnOpenUrl').hidden = true;
   $('btnStartLogin').hidden = false; $('btnStartLogin').disabled = false;
+  $('btnAddApiKey').hidden = true;
   stopPoll();
 }
 function switchAddTab(tab) {
   document.querySelectorAll('#addTabs .tab').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
   $('addTabLogin').hidden = tab !== 'login';
   $('addTabImport').hidden = tab !== 'import';
+  $('addTabApiKey').hidden = tab !== 'apikey';
+  // 页脚按钮随标签切：登录页「获取授权链接」、API Key 页「添加 API Key」，导入页无页脚按钮。
+  $('btnAddApiKey').hidden = tab !== 'apikey';
+  $('btnStartLogin').hidden = tab !== 'login' || loginState != null;
 }
 document.querySelectorAll('#addTabs .tab').forEach(b => {
   b.onclick = () => switchAddTab(b.dataset.tab);
@@ -1419,6 +1501,31 @@ async function pollLogin() {
 function closeAdd() { stopPoll(); loginState = null; $('addVeil').classList.remove('on'); }
 $('btnCloseAdd').onclick = closeAdd;
 $('btnStartLogin').onclick = startAddLogin;
+
+$('btnAddApiKey').onclick = async () => {
+  const token = ($('apiKeyInput').value || '').trim();
+  $('apiKeyDone').hidden = true; $('apiKeyErr').hidden = true;
+  if (!token) { $('apiKeyErr').hidden = false; $('apiKeyErr').textContent = '请填写 API Key'; return; }
+  const btn = $('btnAddApiKey');
+  btn.disabled = true;
+  try {
+    const r = await api('accounts/add_apikey', {
+      method: 'POST',
+      body: JSON.stringify({
+        access_token: token,
+        nickname: ($('apiKeyNickname').value || '').trim(),
+        uid: ($('apiKeyUid').value || '').trim(),
+      }),
+    });
+    $('apiKeyDone').hidden = false;
+    $('apiKeyDone').textContent = '已添加 ' + (r.nickname || r.uid) + '（API Key 账号），账号已载入池中';
+    $('apiKeyInput').value = '';
+    setTimeout(() => { closeAdd(); loadOverview(true); }, 1600);
+  } catch (e) {
+    $('apiKeyErr').hidden = false;
+    $('apiKeyErr').textContent = '添加失败：' + e.message;
+  } finally { btn.disabled = false; }
+};
 $('btnOpenUrl').onclick = () => open($('addUrl').textContent, '_blank');
 $('btnCopyUrl').onclick = () => navigator.clipboard.writeText($('addUrl').textContent)
   .then(() => toast('链接已复制', 'ok'), () => toast('复制失败，请手动选择复制', 'err'));
@@ -3181,7 +3288,7 @@ bindRestToggle('compBody');
 /* ── 精简 QR 编码器（券码二维码用）────────────────────────────────────
    规格子集：byte 模式、ECC L、版本 1-5（全部单纠错块，免块交织）、固定掩码 0。
    完整性：规范允许任选掩码（解码器按格式信息位自行去掩码），固定掩码不影响
-   可扫描性；旧网关已用 python qrcode 库对多输入多版本做逐像素交叉验证
+   可扫描性；已用 python qrcode 库对多输入多版本做逐像素交叉验证
    （强制 byte 模式 + mask 0，5/5 全部 diff=0）。面板 CSP 只允许 self，外链 QR 服务不可用。 */
 // GF(256) 对数/指数表（本原多项式 0x11d）
 const QR_EXP = new Array(512), QR_LOG = new Array(256);

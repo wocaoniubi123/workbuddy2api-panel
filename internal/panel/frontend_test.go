@@ -630,6 +630,58 @@ process.stdout.write(JSON.stringify({
 	}
 }
 
+// Global 模型可用性标签：模型锁优先于最近请求；无本地证据时保持“待验证”，
+// 不能把上游目录里出现模型误判为当前账号有权限。
+func TestAppJSModelAvailability(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; model availability test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function mdAvailabilityOf');
+const end = src.indexOf('function mdRowHtml');
+if (start < 0 || end < 0) throw new Error('model availability helpers not found');
+const ctx = { esc: s => String(s) };
+vm.createContext(ctx);
+vm.runInContext(src.slice(start, end) + '\nthis.mdAvailabilityOf=mdAvailabilityOf; this.mdAvailabilityTag=mdAvailabilityTag;', ctx);
+const model = id => ({ id });
+const state = (m, locks, recent) => ctx.mdAvailabilityOf(m, locks, recent).key;
+const success = [{ model: 'global:ok', status: 200, outcome: 'success', time: '2026-10-18T12:00:00Z' }];
+ctx.mdLocks = [{ realm: 'global', model: 'gpt-5.6-sol', state: 'locked', reason: '11158 model not allowed for account type' }];
+ctx.mdRecent = [];
+const deniedTag = ctx.mdAvailabilityTag(model('global:gpt-5.6-sol'));
+process.stdout.write(JSON.stringify({
+  cn: ctx.mdAvailabilityOf(model('cn:glm-5.3'), [], []),
+  unknown: state(model('global:unknown'), [], []),
+  denied: state(model('global:gpt-5.6-sol'), [{ realm: 'global', model: 'gpt-5.6-sol', state: 'locked', reason: '11158 model not allowed for account type' }], []),
+  missing: state(model('global:auto-chat'), [{ realm: 'global', model: 'auto-chat', state: 'locked', reason: '11102 service info not found' }], []),
+  partial: state(model('global:glm-5.3'), [{ realm: 'global', model: 'glm-5.3', state: 'partial', reason: '6004 model rate limit' }], []),
+  starved: state(model('global:glm-5.3'), [{ realm: 'global', model: 'glm-5.3', state: 'starved' }], []),
+  rate: state(model('global:glm-5.3'), [], [{ model: 'global:glm-5.3', status: 429 }]),
+  upstream: state(model('global:glm-5.3'), [], [{ model: 'global:glm-5.3', status: 503 }]),
+  ok: state(model('global:ok'), [], success),
+  deniedTag: deniedTag.includes('无权限') && deniedTag.includes('tag bad'),
+}));`
+	f, err := os.CreateTemp(t.TempDir(), "model-availability-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("model availability node test failed: %v\n%s", err, out)
+	}
+	const want = `{"cn":null,"unknown":"unknown","denied":"denied","missing":"missing","partial":"partial","starved":"starved","rate":"rate","upstream":"upstream","ok":"ok","deniedTag":true}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("model availability=%s want %s", out, want)
+	}
+}
+
 // 用量时序图的柱体类名不得叫 bar：账号池的积分条是 .bar{height:3px}，而 SVG2 里
 // height 是 rect 的 CSS 几何属性——同名类会把每根柱子压成 3px 高，图看起来"没数据"。
 // 这个坑只能在浏览器里看出来，所以在这里钉住类名。
@@ -1514,6 +1566,7 @@ const els = {};
 const ctx = {
   Date, Math, Number, String, isFinite,
   PK_DAY_MS: 86400000,
+  // 无按钮桩 → applyRestToggle 取不到按钮直接返回。
   $: id => (els[id] = els[id] || { innerHTML: '', textContent: '', addEventListener: () => {},
        querySelector: () => null, querySelectorAll: () => [] }),
   esc: s => String(s == null ? '' : s),
@@ -1521,7 +1574,10 @@ const ctx = {
   pkExpiryDateTime: ms => new Date(ms).toISOString(),   // 只取前 10 位，时区口径由真函数负责
 };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.renderExpirySnapshot = renderExpirySnapshot;', ctx);
+// 展开态恢复由 TestAppJSExpiryRestToggleSurvivesRerender 专测；本用例的 tbody 桩没有按钮，
+// applyRestToggle 用 querySelector 取不到按钮会直接返回，不影响渲染断言。
+vm.runInContext('const restOpen = Object.create(null);\n' +
+  src.slice(start, end) + '\nthis.renderExpirySnapshot = renderExpirySnapshot;', ctx);
 const day = n => new Date(Date.now() + n * 86400000).toISOString();
 ctx.renderExpirySnapshot({ accounts: [
   { uid: 'aaaaaaaa-1', nickname: '秋',     credits_earliest_expiry: day(20), credits_earliest_remaining: 499 },
@@ -1687,6 +1743,7 @@ function el(id) {
   if (!els[id]) els[id] = {
     textContent: '', innerHTML: '', hidden: false, rows: [], btn: null, handlers: {},
     addEventListener(ev, fn) { this.handlers[ev] = fn; },
+    querySelector(sel) { return sel === 'button[data-exp-rest]' ? this.btn : null; },
     querySelectorAll() { return this.rows; },
     querySelector(sel) { return sel === 'button[data-exp-rest]' ? this.btn : null; },
   };
@@ -1840,6 +1897,124 @@ func TestPanelCompensationWiring(t *testing.T) {
 	}
 }
 
+// TestAppJSExpiryRestToggleSurvivesRerender 钉住「其余 N 个账号」的展开态不会被 5s 轮询自动收起。
+//
+// 根因：账号池每 5s 调 loadOverview → renderExpirySnapshot 重建 #expBody.innerHTML；展开状态
+// 原先只写在 DOM（aria-expanded / hidden）上，重建即丢（用户看到「点展开后什么都不点又收起」）。
+// 现在状态存在模块级 restOpen，渲染后由 applyRestToggle 恢复；本测试同时钉住两个渲染函数的
+// 调用接线（只存状态不恢复，行为仍会回退）。
+func TestAppJSExpiryRestToggleSurvivesRerender(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed; rest toggle test skipped")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('// 按 restOpen 把指定 tbody 的收纳行');
+const end = src.indexOf("bindRestToggle('compBody');") + "bindRestToggle('compBody');".length;
+if (start < 0 || end < 0) throw new Error('rest toggle block not found');
+
+// 极简 tbody 桩：只实现 applyRestToggle / bindRestToggle 用到的 querySelector(All) 与事件。
+function makeBody(n) {
+  const o = {
+    rows: [], btn: null, handlers: {},
+    addEventListener(ev, fn) { this.handlers[ev] = fn; },
+    querySelector(sel) { return sel === 'button[data-exp-rest]' ? this.btn : null; },
+    querySelectorAll(sel) { return sel === 'tr[data-exp-row="rest"]' ? this.rows : []; },
+  };
+  reset(o, n);
+  return o;
+}
+function reset(o, n) {
+  o.rows = Array.from({ length: n }, () => ({ hidden: true }));
+  o.btn = {
+    dataset: { expRest: String(n) },
+    textContent: '其余 ' + n + ' 个账号，展开',
+    attrs: { 'aria-expanded': 'false' },
+    getAttribute(k) { return this.attrs[k]; },
+    setAttribute(k, v) { this.attrs[k] = v; },
+  };
+}
+const bodies = { expBody: makeBody(7), compBody: makeBody(2) };
+const $ = id => bodies[id] || null;
+const ctx = { $ };
+vm.createContext(ctx);
+vm.runInContext('const restOpen = Object.create(null);\n' + src.slice(start, end) +
+  '\nthis.restOpen = restOpen; this.applyRestToggle = applyRestToggle;', ctx);
+  // 本仓 renderExpirySnapshot 是「摘要行 + 悬停明细」版（#expList 为 div，没有收纳行），
+  // app.js 里只 bindRestToggle('compBody')；这里手动给 expBody 桩装上同一套点击逻辑，
+  // 复用下面针对 applyRestToggle 行为的断言。
+  bodies.expBody.handlers.click = ev => {
+    const btn = ev.target.closest('button[data-exp-rest]');
+    if (!btn) return;
+    const next = !ctx.restOpen.expBody;
+    ctx.restOpen.expBody = next;
+    ctx.applyRestToggle(bodies.expBody, next);
+  };
+
+function click(body) {
+  body.handlers.click({ target: { closest: sel => (sel === 'button[data-exp-rest]' ? body.btn : null) } });
+}
+const exp = bodies.expBody;
+click(exp);
+const opened = { hidden: exp.rows.map(r => r.hidden), aria: exp.btn.attrs['aria-expanded'], text: exp.btn.textContent };
+// 模拟 5s 轮询重建 tbody：行/按钮回到折叠默认态，渲染函数随后按 restOpen 恢复。
+reset(exp, 7);
+ctx.applyRestToggle(exp, ctx.restOpen.expBody);
+const survived = { hidden: exp.rows.map(r => r.hidden), aria: exp.btn.attrs['aria-expanded'], text: exp.btn.textContent };
+// 两张卡片的状态必须独立：展开到期提醒不能顺带展开官方补偿。
+const independent = bodies.compBody.rows.every(r => r.hidden === true);
+click(exp);
+const collapsed = { hidden: exp.rows.map(r => r.hidden), aria: exp.btn.attrs['aria-expanded'], text: exp.btn.textContent };
+process.stdout.write(JSON.stringify({ opened, survived, independent, collapsed }));`
+	f, err := os.CreateTemp(t.TempDir(), "rest-toggle-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("rest toggle node test failed: %v\n%s", err, out)
+	}
+	const all = "[false,false,false,false,false,false,false]"
+	const none = "[true,true,true,true,true,true,true]"
+	want := `{"opened":{"hidden":` + all + `,"aria":"true","text":"收起其余 7 个账号"},` +
+		`"survived":{"hidden":` + all + `,"aria":"true","text":"收起其余 7 个账号"},` +
+		`"independent":true,"collapsed":{"hidden":` + none + `,"aria":"false","text":"其余 7 个账号，展开"}}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("收纳行展开/恢复不符:\n got=%s\nwant=%s", strings.TrimSpace(string(out)), want)
+	}
+
+	// 接线：两个渲染函数都必须在重建 innerHTML 之后恢复状态（先恢复会被随后的重建覆盖）。
+	raw, err := os.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsStr := string(raw)
+	for _, fn := range []struct{ name, call string }{
+		{"renderCompensation", "applyRestToggle(body, restOpen.compBody);"},
+	} {
+		at := strings.Index(jsStr, "function "+fn.name+"(")
+		if at < 0 {
+			t.Fatalf("app.js 找不到 %s", fn.name)
+		}
+		body := jsStr[at:]
+		if end := strings.Index(body, "\n}\n"); end > 0 {
+			body = body[:end]
+		}
+		rebuild := strings.Index(body, ".innerHTML")
+		restore := strings.Index(body, fn.call)
+		if rebuild < 0 || restore < 0 || restore < rebuild {
+			t.Errorf("%s 未在重建 innerHTML 后恢复收纳展开态（innerHTML@%d restore@%d）",
+				fn.name, rebuild, restore)
+		}
+	}
+}
+
 // TestAppJSModelBusyTag 模型行渲染行为：busy/congested 必须出标签（bad 色），
 // idle/normal 与缺字段必须安静——「模型与档位」是唯一能看到 congested/unavailable 的地方。
 // 行为断言而非字符串断言：后者在 `if (false)` 这种「代码在但永远不跑」下仍会通过。
@@ -1851,7 +2026,9 @@ func TestAppJSModelBusyTag(t *testing.T) {
 	script := `const fs = require('fs');
 const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-const start = src.indexOf('// 上游模型繁忙度（/v2/chat/busy）文案');
+// 起点前移到模型行渲染这一整段（含 mdAvailabilityOf/mdAvailabilityTag），
+// 否则上游新增的可用性标签会在截取区间外、被当成未定义。
+const start = src.indexOf('function mdAvailabilityOf');
 const end = src.indexOf('function renderModels()');
 if (start < 0 || end < start) throw new Error('busy block not found');
 const ctx = {
@@ -1918,7 +2095,9 @@ const ctx = {
 };
 ctx.$ = id => ctx[id];
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.renderExpirySnapshot=renderExpirySnapshot;', ctx);
+// 展开态恢复另有专测；这里只断言快照/排序/兜底渲染（桩无按钮 → applyRestToggle 直接返回）。
+vm.runInContext('const restOpen = Object.create(null);\n' +
+  src.slice(start, end) + '\nthis.renderExpirySnapshot=renderExpirySnapshot;', ctx);
 const day = n => {
   const d = new Date(Date.now() + n * 86400000);
   const parts = new Intl.DateTimeFormat('en-US', {
