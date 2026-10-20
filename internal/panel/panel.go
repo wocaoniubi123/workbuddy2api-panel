@@ -214,6 +214,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/compensation_all", p.withAuth(p.compensationAll))
 	p.mux.HandleFunc("POST /panel/api/travel_all", p.withAuth(p.travelAll))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/travel", p.withAuth(p.accountTravel))
+	p.mux.HandleFunc("GET /panel/api/model_locks", p.withAuth(p.modelLocks))
 	p.mux.HandleFunc("POST /panel/api/activity_all", p.withAuth(p.activityAll))
 	p.mux.HandleFunc("POST /panel/api/keepalive_all", p.withAuth(p.keepaliveAll))
 	p.mux.HandleFunc("POST /panel/api/balance_all", p.withAuth(p.balanceAll))
@@ -1202,6 +1203,13 @@ func (p *Panel) packages(w http.ResponseWriter, r *http.Request) {
 	// 余额降序：多的在前，便于和少的对比。
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Remain > out[j].Remain })
 	writeJSON(w, http.StatusOK, map[string]any{"accounts": out})
+}
+
+// modelLocks 模型锁池（轻量端点）：只回 model_locks 一项，供模型页判 Global 模型可用性
+// （mdAvailabilityOf 的锁判据）。与 overview 同源（Pool.ModelLockView），避免为这一项
+// 拉整包 overview（32 账号全量）。无锁时为 null——前端按 Array.isArray 回落空数组。
+func (p *Panel) modelLocks(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"model_locks": p.cfg.Pool.ModelLockView()})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

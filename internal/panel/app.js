@@ -727,7 +727,7 @@ async function loadModels(force) {
     const [d, pr, st, rm] = await Promise.all([
       api('models' + (force ? '?refresh=1' : '')),
       api('model_probes').catch(() => ({})),
-      api('status').catch(() => ({})),
+      api('model_locks').catch(() => ({})),
       api('request_metrics').catch(() => ({})),
     ]);
     mdAll = d.models || [];
