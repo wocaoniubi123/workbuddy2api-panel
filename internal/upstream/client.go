@@ -2471,7 +2471,8 @@ func (c *Client) userResourceSnapshotInternal(a *auth.Auth, soon time.Duration) 
 	if a.IsGlobal() {
 		rm, tt, ex, ea, er, bk, gerr := c.globalUserResource(a, soon)
 		if gerr == nil {
-			// packs 为 nil：国际版 summary 只给汇总，逐包明细仍走下面的 CN 分页路径。
+			// packs 为 nil：国际版 summary 只给汇总，不返回逐包明细——面板「积分构成」
+			// 对国际号因此显示空，余额与到期批次仍按 summary 结果正确。
 			return rm, tt, ex, ea, er, bk, nil, nil
 		}
 		log.Printf("WARN: billing %s: global summary 失败，回落个人资源包路径: %v",
