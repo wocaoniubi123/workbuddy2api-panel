@@ -437,8 +437,9 @@ func (h *Handler) hiddenModel(realm, bare string) bool {
 	return hide
 }
 
-// modelList 模型列表：CN 模型输出统一加 "cn:" 前缀（gateway 路由协议，与 resolveModel
-// 对称）；global.enabled=true 时追加 global: 前缀的国际版名单。
+// modelList 模型列表：CN 模型输出**裸名**（不加 "cn:"）——resolveModel 对无前缀名默认按
+// CN 路由，客户端直接填裸名即可；global.enabled=true 时追加 global: 前缀的国际版名单
+// （同名模型靠这个前缀区分）。
 // 纯动态：动态拉取失败/无号 → 该域空列表，无静态兜底。
 func (h *Handler) modelList() []map[string]any {
 	out := make([]map[string]any, 0)
