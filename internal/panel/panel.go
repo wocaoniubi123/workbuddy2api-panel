@@ -486,8 +486,8 @@ func (p *Panel) nicknames() map[string]string {
 
 // models 实时查询上游模型列表与 reasoning 实际档位（直连上游，不读路由层 1h 缓存）：
 // 回答"该模型到底支持哪几档思考"。顺带刷新 client 的 effort 降级能力缓存。
-// 与 /v1/models 同口径的双域输出：CN 域模型加 "cn:" 前缀、global 域加 "global:" 前缀
-// （gateway 路由协议，前端显示的 id 就是调用时要填的完整 model 值）。
+// 与 /v1/models 同口径的双域输出：CN 域输出**裸名**（不加 "cn:"）、global 域加
+// "global:" 前缀（gateway 路由协议，前端显示的 id 就是调用时要填的完整 model 值）。
 // 各域独立探测、独立容错：某域无可用账号则整域跳过；两域全空时才报错
 // （有错误明细回 502，一个账号都没有回 503）。
 func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
