@@ -789,7 +789,13 @@ function mdMatch(m, f) {
       if (!text.includes(kw)) return false;
     }
   }
-  if (f.realm && !String(m.id || '').startsWith(f.realm + ':')) return false;
+  // 按域筛选：CN 模型输出裸名（不带 cn: 前缀，见 panel.go 的 panelModelEntry），
+  // 只有 global 域带 "global:" 前缀。所以不能按「id 前缀 == 域名」判断，否则选
+  // 「国内版 CN」永远 0 命中——要按「有没有 global: 前缀」反推域。
+  if (f.realm) {
+    const isGlobal = String(m.id || '').startsWith('global:');
+    if (f.realm === 'global' ? !isGlobal : isGlobal) return false;
+  }
   if (f.cap === 'tool' && !m.supports_tool_call) return false;
   if (f.cap === 'vision' && !m.supports_images) return false;
   if (f.cap === 'reasoning' && !m.supports_reasoning) return false;

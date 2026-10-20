@@ -601,6 +601,12 @@ process.stdout.write(JSON.stringify({
   imgById: filter({ q: 'hunyuan-image-alpha' }),
   rateFree: ctx.mdRateValue(models[1]),
   rateMissing: ctx.mdRateValue(models[3]),
+  // 回归护栏（2026-10-20）：真实数据里 CN 模型输出裸名（不带 cn: 前缀，见
+  // panel.go 的 panelModelEntry）。旧实现按「id 前缀 == 域名」筛选，选
+  // 「国内版 CN」永远 0 命中；现按「有没有 global: 前缀」反推域。
+  bareCn: ids([{ id: 'glm-5.3' }].filter(m => ctx.mdMatch(m, { realm: 'cn' }))),
+  bareCnMiss: ids([{ id: 'glm-5.3' }].filter(m => ctx.mdMatch(m, { realm: 'global' }))),
+  bareGlobal: ids([{ id: 'global:gpt-5.6-sol' }].filter(m => ctx.mdMatch(m, { realm: 'global' }))),
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "model-filter-*.cjs")
 	if err != nil {
@@ -624,7 +630,8 @@ process.stdout.write(JSON.stringify({
 		`"sortContext":["cn:glm-5.2","global:hy3","cn:auto","cn:hy3","cn:hunyuan-image-alpha"],` +
 		`"sortOutput":["global:hy3","cn:glm-5.2","cn:hy3","cn:auto","cn:hunyuan-image-alpha"],` +
 		`"sortName":["cn:auto","cn:glm-5.2","cn:hunyuan-image-alpha","cn:hy3","global:hy3"],` +
-		`"imgBadge":true,"imgById":["cn:hunyuan-image-alpha"],"rateFree":0,"rateMissing":null}`
+		`"imgBadge":true,"imgById":["cn:hunyuan-image-alpha"],"rateFree":0,"rateMissing":null,` +
+		`"bareCn":["glm-5.3"],"bareCnMiss":[],"bareGlobal":["global:gpt-5.6-sol"]}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("model filter=%s\nwant %s", out, want)
 	}
