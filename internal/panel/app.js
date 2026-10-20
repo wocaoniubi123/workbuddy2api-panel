@@ -544,6 +544,11 @@ async function loadOverview(quiet) {
     const remSum = (d.accounts || []).reduce((a, s) => a + (s.credits || 0), 0);
   const totSum = (d.accounts || []).reduce((a, s) => a + (s.credits_total || 0), 0);
   $('sCredits').textContent = totSum > 0 ? remSum + ' / ' + totSum : remSum;
+    // 在途请求：各账号 in_flight 之和（与「N 个账号在途占满」同一数据源），
+    // 只统计当前真正并发中的请求，不含排队。
+    if ($('sInflight')) {
+      $('sInflight').textContent = (d.accounts || []).reduce((a, s) => a + (s.in_flight || 0), 0);
+    }
     $('sSticky').textContent = d.sticky_sessions;
     $('navSub').textContent = 'v' + d.version;
     $('navVer').textContent = 'v' + d.version;
