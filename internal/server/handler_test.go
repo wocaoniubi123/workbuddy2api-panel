@@ -427,6 +427,10 @@ func TestChatSyncEmptyUpstreamBodyIs502(t *testing.T) {
 
 func TestChatStreamPassthrough(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		// 本机（Windows）time.Now() 精度只到毫秒级：零延迟 fake 会让流式 ttfb 记成 0，
+		// 而 tokensPerSecond 对 ttfb<=0 的设计是「拿不到生成段 → 不报速率」（见该函数
+		// 注释），于是 LastTokensPerSecond 为 nil。留 15ms 让首帧延迟可测，断言才验得到速率。
+		time.Sleep(15 * time.Millisecond)
 		return 200, sseOK, true
 	})
 	h := NewHandler(Config{
