@@ -794,7 +794,7 @@ func (p *Panel) persistQueueResults(items []queueItem, startedAt time.Time) {
 				Credit:  it.Credit,
 				Energy:  it.Energy,
 			}
-			upsertTaskJobResult(&job, it.Code, out.resultMap(autoActionFor(it.Code)))
+			upsertTaskJobResult(&job, it.Code, out.resultMap(queuedActionFor(it.Code)))
 		}
 		job.Completed = countCompletedTaskResults(job.Results)
 		m.jobs[uid] = job

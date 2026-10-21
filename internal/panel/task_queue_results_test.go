@@ -70,3 +70,51 @@ func TestPersistQueueResultsWritesTaskJobs(t *testing.T) {
 		t.Error("task-jobs.json 里没有 WorkBuddy_Valorant，说明没落盘")
 	}
 }
+
+// TestPersistQueueResultsKeepsUnlistedTaskCode 白名单外（补领）任务的结果也必须带
+// task_code / desc。
+//
+// 为什么：上游 issue #174 让达标未领的白名单外任务也能入队（queuedActionFor 合成
+// claimOnlyAction）。persistQueueResults 若仍用 autoActionFor，这些码拿到 nil，
+// resultMap 的 `if act != nil` 会静默丢掉 task_code / desc——「刷新进度」只剩一条
+// message，看不出是哪个任务补领的。走 queuedActionFor 后白名单内行为完全不变
+// （它内部先调 autoActionFor）。
+func TestPersistQueueResultsKeepsUnlistedTaskCode(t *testing.T) {
+	const uid = "queue-unlisted-uid"
+	const unlisted = "some_future_task_code"
+	if autoActionFor(unlisted) != nil {
+		t.Fatalf("%q 已在白名单里，换一个没登记的任务码", unlisted)
+	}
+
+	p, _, _ := newTaskJobTestPanel(t, uid, "", nil)
+	p.persistQueueResults([]queueItem{
+		{UID: uid, Nickname: "号B", Kind: "growth", Code: unlisted, Status: "done", Message: "补领成功", Credit: 50},
+	}, time.Now().Add(-time.Minute))
+
+	m := p.getTaskJobManager()
+	if m == nil {
+		t.Fatal("taskjobs manager 未启动")
+	}
+	m.mu.Lock()
+	job, ok := m.jobs[uid]
+	m.mu.Unlock()
+	if !ok {
+		t.Fatal("job 没有写入内存")
+	}
+	if len(job.Results) != 1 {
+		t.Fatalf("Results 条数 = %d, want 1", len(job.Results))
+	}
+	r := job.Results[0]
+	if code, _ := r["task_code"].(string); code != unlisted {
+		t.Errorf("task_code = %q, want %q（白名单外应经 queuedActionFor 合成）", code, unlisted)
+	}
+	if desc, _ := r["desc"].(string); desc == "" {
+		t.Error("desc 为空：白名单外任务缺少合成描述")
+	}
+	// 进度分子：countCompletedTaskResults 对 task_code 为空的条目直接跳过
+	// （taskjobs.go:689-691）。修复前白名单外任务没有 task_code，补领的 done
+	// 根本进不了 Completed——不只是「描述缺失」，进度条也少算了一格。
+	if job.Completed != 1 {
+		t.Errorf("Completed = %d, want 1（白名单外补领 status=done 必须计入进度）", job.Completed)
+	}
+}
