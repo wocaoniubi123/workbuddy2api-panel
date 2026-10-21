@@ -2823,7 +2823,16 @@ async function fetchChartUsage() {
     return usChartCache.data;
   }
   try {
-    const d = await api(usChartWin === '30' ? 'usage?hours=720' : 'usage?hours=360');
+    // 按自然日对齐：从 N 天前的本地 00:00 起算。
+    // 用 hours=360/720 是「滚动 360/720 小时」，起点落在半天中间，边界那天只统计到
+    // 一半——同一日期在 15 天视图和 30 天视图会给出两个不同的数字（实测 10-07：
+    // 24.06亿 vs 26.16亿）。改成自然日起点后，窗口内每一天都是完整的 00:00→次日 00:00，
+    // 两个视图里同一天的数字完全一致。
+    const from = new Date();
+    from.setHours(0, 0, 0, 0);
+    from.setDate(from.getDate() - (usChartWin === '30' ? 30 : 15));
+    const sec = Math.floor(from.getTime() / 1000);
+    const d = await api('usage?from=' + sec);
     usChartCache = { win: usChartWin, at: now, data: d };
     return d;
   } catch (e) {
