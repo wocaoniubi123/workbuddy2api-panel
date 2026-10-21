@@ -173,6 +173,9 @@ type Config struct {
 		DeviceTokenFile string `json:"device_token_file"`
 		// PassthroughIP 是否透传客户端 IP 给上游（默认 false，反代安全边界）。
 		PassthroughIP bool `json:"passthrough_ip"`
+		// DumpDir 非空时把 chat 请求的出站报文 + 上游原始响应落盘（诊断用，见
+		// internal/upstream/dump.go）。默认空 = 不落盘：正文含用户提示词。
+		DumpDir string `json:"dump_dir"`
 	} `json:"upstream"`
 
 	Features struct {
@@ -185,6 +188,14 @@ type Config struct {
 		// 生效点：GET /v1/models 列表过滤 + POST /v1/chat/completions 点名拒绝
 		// （只藏列表不够——知道名字仍可硬调）。面板保存后经 livecfg 热生效，无需重启。
 		Hidden []string `json:"hidden"`
+		// Aliases 模型映射表（issue #30）："客户端名=真实模型名" 条目数组，与 Hidden
+		// 同存储形态（数组整体覆盖，面板删条目无需重启）。键：裸名=两域生效，
+		// "cn:x"/"global:x"=只在该域生效；键大小写不敏感。值可带 realm 前缀实现跨域
+		// 指向（"my-glm": "global:glm-5.2"）。生效点：chat 请求解析 realm/裸名之后、
+		// 隐藏检查/选号/出站 body 之前整体替换；被映射到的目标仍受 Hidden 约束
+		// （别名不能绕过黑名单）。响应/日志/账本按实际生效模型名口径。
+		// 面板保存后经 livecfg 热生效，无需重启。
+		Aliases []string `json:"aliases"`
 	} `json:"models"`
 
 	Prompt struct {
@@ -250,9 +261,14 @@ type Config struct {
 		AccountShare    map[string]float64 `json:"account_share"`
 		// CreditFloor 积分保底：账号余额低于该值时，对实测收费模型（tier 2）不再
 		// 参与选号——防止收费请求把余额打穿、连免费模型都 402 冷却到次日签到。
-		// tier 0（免费）/ tier 1（无观测）不受限；签到回血越过 floor 自动恢复。
-		// 默认 0 = 关闭；负值钳 0。
+		// tier 0（免费）不受限；tier 1（无观测）按目录倍率分档：≤ 下面的
+		// CreditFloorMaxRate 放行（让便宜新模型跑出第一笔账本），更高的仍拦。
+		// 签到回血越过 floor 自动恢复。默认 0 = 关闭；负值钳 0。
 		CreditFloor int64 `json:"credit_floor"`
+		// CreditFloorMaxRate 保底兜底允许的目录倍率上限（issue #30 / PR #2）。
+		// 0.2 = 便宜模型（x0.11 这类）在触底号上放行入账，x1.62 这类仍按收费拦。
+		// 0 = 严格模式（任何已知正倍率都拦）；负值钳 0。面板「积分保底」档位旁可改。
+		CreditFloorMaxRate float64 `json:"credit_floor_max_rate"`
 	} `json:"pool"`
 
 	SessionSticky struct {
@@ -522,6 +538,9 @@ func applyEnv(c *Config) {
 	if v := os.Getenv("WB2A_DEVICE_TOKEN_FILE"); v != "" {
 		c.Upstream.DeviceTokenFile = v
 	}
+	if v := os.Getenv("WB2A_DUMP_UPSTREAM"); v != "" {
+		c.Upstream.DumpDir = v
+	}
 	if v := os.Getenv("WB2A_PASSTHROUGH_IP"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			c.Upstream.PassthroughIP = b
@@ -722,6 +741,11 @@ func (c *Config) normalize() error {
 	// 积分保底：负值钳 0（= 关闭）。0 是合法默认（关闭），无需空值回落。
 	if c.Pool.CreditFloor < 0 {
 		c.Pool.CreditFloor = 0
+	}
+	// 保底倍率上限：负值钳 0（= 严格模式，任何已知正倍率都拦）。
+	// 不设非零默认是有意的——这是钱相关开关，升级不该静默放宽既有防护。
+	if c.Pool.CreditFloorMaxRate < 0 {
+		c.Pool.CreditFloorMaxRate = 0
 	}
 	if c.Pool.BreakerThreshold <= 0 {
 		c.Pool.BreakerThreshold = 3
