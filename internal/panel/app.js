@@ -136,6 +136,7 @@ const TRANGE_PRESETS = [
   ['24', '近 24 小时'],
   ['72', '近 3 天'],
   ['168', '近 7 天'],
+  ['360', '近 15 天'],
   ['720', '近 30 天'],
   ['0', '全部历史'],
   ['custom', '自定义…'],
@@ -1038,12 +1039,12 @@ function renderRequestMetrics(m, entries) {
   m = m || {};
   const a = m.archive || {};
   $('reqStats').innerHTML =
-    usStat(fmtTok(m.completed), '已完成') +
+    usStat(fmtNum(m.completed), '已完成') +
     usStat(m.success_rate == null ? '—' : Number(m.success_rate).toFixed(1) + '%', '完成成功率') +
     usStat(m.http_success_rate == null ? '—' : Number(m.http_success_rate).toFixed(1) + '%', 'HTTP 成功率') +
     usStat(fmtMs(m.avg_duration_ms), '平均耗时') +
     usStat(String(m.in_flight || 0), '进行中') +
-    usStat(fmtTok(a.files), '归档文件');
+    usStat(fmtNum(a.files), '归档文件');
   $('reqNote').textContent = a.enabled
     ? 'JSONL 归档 ' + fmtBytes(a.bytes) + (a.dropped_writes ? ' · 丢弃 ' + a.dropped_writes + ' 条' : '') +
       (a.last_error ? ' · 错误：' + a.last_error : '')
@@ -2112,19 +2113,35 @@ function reattachQueueView() {
 
 function fmtTok(n) {
   n = Number(n || 0);
-  // 全量显示（取消 M/K/B 缩写）：≥1 亿收两位小数用「亿」，其余千分位。
-  // 用量页/图表保留这套；窄表格与请求日志行用下面的 fmtTokShort（口径不同，刻意分开）。
+  // 非有限值按 0 处理：token 缺失/脏数据时显示 0，而不是 "NaN" / "Infinity亿"。
+  if (!Number.isFinite(n)) return '0';
+  // 统一口径：≥1 亿收两位小数用「亿」，≥1 万用「万」，万以下原样显示（不加千分位）。
   if (n >= 1e8) return (n / 1e8).toFixed(2) + '亿';
-  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  if (n >= 1e4) {
+    const w = (n / 1e4).toFixed(2);
+    // 9999.9999 万四舍五入会变成「10000.00万」，进位成「1.00亿」才符合读数习惯。
+    return Number(w) >= 10000 ? (n / 1e8).toFixed(2) + '亿' : w + '万';
+  }
+  return String(Math.round(n));
 }
-/* fmtTokShort 千/百万/十亿缩写（如 2.3k / 1.20M / 2.00B）：请求日志行、图表刻度等
-   紧凑展示专用（列宽/坐标轴放不下全量数字）。 */
-function fmtTokShort(n) {
+/* fmtTokShort 与 fmtTok 同口径（历史上是 B/M/k 缩写，已统一到亿/万制）。
+   保留独立名字只是让调用点语义清楚：紧凑展示处（图表刻度、日志行）走这个。 */
+function fmtTokShort(n) { return fmtTok(n); }
+/* fmtNum 非 token 数字的唯一格式：计数（请求/错误/完成/文件）、积分、额度、包面额。
+   规则：千分位；整数加千分位，小数保留两位去尾零（积分是 float64，可能是 0.12）；
+   超过一亿用亿。
+   与 fmtTok 的分工只有一条线：token 用 fmtTok，别的都用这个。 */
+function fmtNum(n) {
   n = Number(n || 0);
-  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
-  return String(n);
+  if (!Number.isFinite(n)) return '—';
+  if (n >= 1e8) return (n / 1e8).toFixed(2) + '亿';
+  const s = Number.isInteger(n) ? String(n) : trimFixed(n.toFixed(2));
+  const neg = s.startsWith('-');
+  const body = neg ? s.slice(1) : s;
+  const dot = body.indexOf('.');
+  const ip = dot < 0 ? body : body.slice(0, dot);
+  const fp = dot < 0 ? '' : body.slice(dot + 1);
+  return (neg ? '-' : '') + ip.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (fp ? '.' + fp : '');
 }
 function fmtMs(ms) {
   ms = Number(ms || 0);
@@ -2136,11 +2153,6 @@ function fmtRate(r) { return r ? Number(r).toFixed(1) + ' tok/s' : '—'; }
 function trimFixed(s) {
   if (!String(s).includes('.')) return String(s);
   return String(s).replace(/0+$/, '').replace(/\.$/, '');
-}
-function fmtCredit(n) {
-  const v = Number(n || 0);
-  if (!Number.isFinite(v)) return '—';
-  return trimFixed(v.toFixed(2));
 }
 function fmtCreditRatio(v, samples, tokens) {
   if (!samples || !tokens) return '—';
@@ -2176,7 +2188,7 @@ function usMixBar(prompt, completion, total) {
   if (!t) return '';
   const pp = Math.max(0, Math.min(100, Number(prompt || 0) / t * 100));
   const pc = Math.max(0, Math.min(100, Number(completion || 0) / t * 100));
-  return '<span class="us-mix" title="prompt ' + pp.toFixed(1) + '% · completion ' + pc.toFixed(1) + '%">' +
+  return '<span class="us-mix" title="输入 ' + pp.toFixed(1) + '% · 输出 ' + pc.toFixed(1) + '%">' +
     '<i class="p" style="width:' + pp.toFixed(2) + '%"></i>' +
     '<i class="c" style="width:' + pc.toFixed(2) + '%"></i>' +
     '</span>';
@@ -2196,8 +2208,8 @@ function usRow(name, sub, a, mid, withPerf, nameHtml) {
     '<td class="mark" aria-hidden="true"></td>' +
     '<td>' + (nameHtml || esc(name)) + (sub ? '<div class="note">' + esc(sub) + '</div>' : '') + '</td>' +
     (mid || '') +
-    '<td class="num">' + fmtTok(a.requests) + '</td>' +
-    '<td class="num">' + (a.errors ? '<span style="color:var(--warn)">' + fmtTok(a.errors) + '</span>' : '—') + '</td>' +
+    '<td class="num">' + fmtNum(a.requests) + '</td>' +
+    '<td class="num">' + (a.errors ? '<span style="color:var(--warn)">' + fmtNum(a.errors) + '</span>' : '—') + '</td>' +
     '<td class="num">' + fmtTok(a.prompt_tokens) + '</td>' +
     '<td class="num">' + fmtHit(a) + '</td>' +
     '<td class="num">' + fmtTok(a.completion_tokens) + '</td>' +
@@ -2236,7 +2248,7 @@ function usDimHead(dim) {
   return '<tr><th class="mark" aria-hidden="true"></th><th>' + esc(m.title) + '</th>' +
     (m.withRealm ? '<th>域</th>' : '') +
     '<th class="num">请求</th><th class="num">失败</th>' +
-    '<th class="num">Prompt</th><th class="num">缓存命中率</th><th class="num">Completion</th><th class="num">合计</th>' +
+    '<th class="num">输入</th><th class="num">缓存命中率</th><th class="num">输出</th><th class="num">合计</th>' +
     (m.withPerf ? '<th class="num">均延迟</th><th class="num">均速率</th>' : '') +
     '</tr>';
 }
@@ -2298,8 +2310,8 @@ function renderCreditDim() {
         '<td class="mark" aria-hidden="true"></td>' +
         '<td>' + esc(row.key || '—') + '</td>' +
         '<td>' + esc(fmtModelRate(row.rate)) + '</td>' +
-        '<td class="num">' + fmtTok(row.requests) + '</td>' +
-        '<td class="num">' + fmtCredit(row.credits) + '</td>' +
+        '<td class="num">' + fmtNum(row.requests) + '</td>' +
+        '<td class="num">' + fmtNum(row.credits) + '</td>' +
         '<td class="num">' + fmtTok(row.credit_tokens) + '</td>' +
         '<td class="num">' + fmtCreditRatio(row.credits_per_1m_tokens, row.credit_samples, row.credit_tokens) + '</td>' +
         '<td class="num">' + cacheRateCell(row.cache_hit_tokens, row.cache_miss_tokens) + '</td>' +
@@ -2313,8 +2325,8 @@ function renderCreditDim() {
       return '<tr>' +
         '<td class="mark" aria-hidden="true"></td>' +
         '<td>' + remarkName(uid, esc(account)) + '<div class="note">' + esc(row.realm || '') + ' · ' + esc(uid.slice(0, 8)) + '</div></td>' +
-        '<td class="num">' + fmtTok(row.requests) + '</td>' +
-        '<td class="num">' + fmtCredit(row.credits) + '</td>' +
+        '<td class="num">' + fmtNum(row.requests) + '</td>' +
+        '<td class="num">' + fmtNum(row.credits) + '</td>' +
         '<td class="num">' + fmtTok(row.credit_tokens) + '</td>' +
         '<td class="num">' + fmtCreditRatio(row.credits_per_1m_tokens, row.credit_samples, row.credit_tokens) + '</td>' +
         '<td class="num">' + cacheRateCell(row.cache_hit_tokens, row.cache_miss_tokens) + '</td>' +
@@ -2341,16 +2353,16 @@ function renderUsage(d) {
   // 八张卡（消耗积分 + 「使用状态」+ 六张主指标）：主指标用强调色，completion 用
   // 成功色（与图表里的绿柱呼应），失败/延迟只在有值时上语义色。
   $('usStats').innerHTML =
-    usKpi(fmtCredit(t.credits), '消耗积分 · 均 ' + fmtCreditRatio(t.credits_per_1m_tokens, t.credit_samples, t.credit_tokens), 'c-credit') +
+    usKpi(fmtNum(t.credits), '消耗积分 · 均 ' + fmtCreditRatio(t.credits_per_1m_tokens, t.credit_samples, t.credit_tokens), 'c-credit') +
     '<div class="kpi"><div class="v" id="usLive">—</div></div>' +
-    usKpi(fmtTok(reqs), '请求数', 'c-accent',
+    usKpi(fmtNum(reqs), '请求数', 'c-accent',
       errs ? '其中失败 ' + errs + ' 次' : '全部成功') +
     usKpi(fmtTok(total), '总 token', 'c-accent',
-      'prompt ' + usPct(pt, total) + ' · completion ' + usPct(ct, total),
+      '输入 ' + usPct(pt, total) + ' · 输出 ' + usPct(ct, total),
       '<div class="kbar"><i style="width:' + pctW(pt) + ';background:var(--accent)"></i>' +
       '<i style="width:' + pctW(ct) + ';background:var(--ok)"></i></div>') +
-    usKpi(fmtTok(pt), 'prompt', 'c-soft', '占比 ' + usPct(pt, total)) +
-    usKpi(fmtTok(ct), 'completion', 'c-ok', '占比 ' + usPct(ct, total)) +
+    usKpi(fmtTok(pt), '输入', 'c-soft', '占比 ' + usPct(pt, total)) +
+    usKpi(fmtTok(ct), '输出', 'c-ok', '占比 ' + usPct(ct, total)) +
     usKpi(String(errs), '失败尝试', errs ? 'c-warn' : 'c-mute',
       okRate == null ? '—' : (errs ? '成功率 ' + okRate.toFixed(1) + '%' : '成功率 100%')) +
     usKpi(fmtMs(t.avg_latency_ms), '平均延迟', 'c-soft',
@@ -2386,7 +2398,8 @@ function renderUsage(d) {
 
   renderUsageDim();
   renderCreditDim();
-  renderUsageChart(usageData.series || []);
+  // Token 时序不在这里画：它用独立的 15 天窗口数据（见 loadUsage），
+  // 不跟随顶部下拉——否则选「今天」时图里只有小时桶，看不出跨天趋势。
 }
 
 // 维度切换 / 排序控件。
@@ -2425,6 +2438,29 @@ if ($('usSort')) $('usSort').onchange = () => {
  */
 
 /* parsePointTime 把后端的 t 解析成毫秒时间戳。 */
+/* smoothPath 点序列 → 平滑曲线 d 属性（Catmull-Rom 转三次贝塞尔）。
+   曲线经过每个真实数据点，控制点按相邻点切线推算：直接连折线会有硬折角。
+   端点用自身当虚拟邻点，避免首尾段向外甩出绘图区。 */
+function smoothPath(vp) {
+  if (!vp.length) return '';
+  let d = 'M' + vp[0].x.toFixed(1) + ',' + vp[0].y.toFixed(1);
+  if (vp.length === 1) return d;
+  for (let i = 0; i < vp.length - 1; i++) {
+    const p0 = vp[i - 1] || vp[i];
+    const p1 = vp[i];
+    const p2 = vp[i + 1];
+    const p3 = vp[i + 2] || p2;
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ' C' + c1x.toFixed(1) + ',' + c1y.toFixed(1) + ' ' +
+         c2x.toFixed(1) + ',' + c2y.toFixed(1) + ' ' +
+         p2.x.toFixed(1) + ',' + p2.y.toFixed(1);
+  }
+  return d;
+}
+
 function parsePointTime(p) {
   // hour: "2026-09-16T13"  day: "2026-09-16"
   const s = p.t.length === 13 ? p.t + ':00:00' : p.t + 'T00:00:00';
@@ -2436,7 +2472,7 @@ function parsePointTime(p) {
 function fmtTokTimeLabel(p) {
   const d = new Date(p.t);
   return p.scope === 'day'
-    ? (d.getMonth() + 1) + '-' + String(d.getDate()).padStart(2, '0')
+    ? String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0')
     : String(d.getHours()).padStart(2, '0') + ':00';
 }
 
@@ -2445,7 +2481,7 @@ function renderUsageChart(series) {
   const host = $('usChart');
 
   // 丢掉时间解析不出来的点，而不是让 NaN 传染整张图。
-  const pts = [];
+  let pts = [];
   for (const p of series) {
     const t = parsePointTime(p);
     if (t === null) continue;
@@ -2454,6 +2490,24 @@ function renderUsageChart(series) {
     pts.push({ t, scope: p.scope, raw: p.t, pt, ct, tt: Number(p.total_tokens || 0) || (pt + ct),
                ch: Number(p.cache_hit_tokens || 0), cm: Number(p.cache_miss_tokens || 0),
                req: p.requests || 0 });
+  }
+  // 统一折叠到自然日：series 里 90 天前是 day 桶、更近的是 hour 桶，混在一起画会让
+  // X 轴出现「10月21日」和「14:00」两种刻度。这里一律按浏览器本地自然日累加，
+  // 一格一天——15 天窗口就是 15 个点，X 轴全显示日期。
+  if (pts.length) {
+    const byDay = new Map();
+    for (const p of pts) {
+      const d = new Date(p.t);
+      const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+      let e = byDay.get(midnight);
+      if (!e) {
+        e = { t: midnight, scope: 'day', raw: p.raw, pt: 0, ct: 0, tt: 0, req: 0, ch: 0, cm: 0 };
+        byDay.set(midnight, e);
+      }
+      e.pt += p.pt; e.ct += p.ct; e.tt += p.tt; e.req += p.req;
+      e.ch += p.ch; e.cm += p.cm;
+    }
+    pts = [...byDay.values()].sort((a, b) => a.t - b.t);
   }
   if (!pts.length) {
     host.innerHTML = '<div class="us-empty">暂无用量数据。发起一次对话后再刷新。</div>';
@@ -2483,33 +2537,14 @@ function renderUsageChart(series) {
     pts.length + ' 个点 · 峰值 ' + fmtTokShort(peak.tt) + ' @ ' + fmtTokTimeLabel(peak) +
     ' · 均值 ' + fmtTokShort(avg);
 
-  // 柱宽取「最小真实间隔」的 70%，并夹在合理区间内——窗口拉到 30 天时柱子会
-  // 变细，但不会细到看不见。
-  let minGap = Infinity;
-  for (let i = 1; i < pts.length; i++) minGap = Math.min(minGap, pts[i].t - pts[i - 1].t);
-  if (!isFinite(minGap) || minGap <= 0) minGap = span;
-  const slot = iw * (minGap / span);
-  const bw = Math.max(2, Math.min(30, slot * 0.7));
-
-  // 首尾各让出半个柱宽：否则第一个点和最后一个点的柱子会各有一半跑到绘图区外
-  // （末点柱子贴着卡片右边缘被切掉），刻度仍用同一个 xOf，标签与柱子始终对齐。
-  const xOf = t => PL + bw / 2 + (t - t0) / span * Math.max(1, iw - bw);
+  // 曲线铺满整个绘图区（不再为柱宽让位）：首尾点各贴左右边界，
+  // 刻度与数据点用同一个 xOf，标签始终对齐。
+  const xOf = t => PL + (pts.length === 1 ? iw / 2 : (t - t0) / span * iw);
   const yOf = v => PT + ih - ih * (v / max);
 
   let out = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" ' +
             'preserveAspectRatio="xMidYMid meet">';
 
-  // 柱体渐变：顶部实、底部略透，堆叠时两段仍能一眼分清（纯色块并排会糊成一片）。
-  // 注意 stop-color 必须走 style 而不是 presentation 属性——Blink/WebKit 不解析
-  // 属性里的 var()，写成 stop-color="var(--accent)" 会整条渐变失效（柱子全透明）。
-  out += '<defs>' +
-    '<linearGradient id="usGradP" x1="0" y1="0" x2="0" y2="1">' +
-    '<stop offset="0" style="stop-color:var(--accent);stop-opacity:1"/>' +
-    '<stop offset="1" style="stop-color:var(--accent);stop-opacity:.6"/></linearGradient>' +
-    '<linearGradient id="usGradC" x1="0" y1="0" x2="0" y2="1">' +
-    '<stop offset="0" style="stop-color:var(--ok);stop-opacity:1"/>' +
-    '<stop offset="1" style="stop-color:var(--ok);stop-opacity:.6"/></linearGradient>' +
-    '</defs>';
 
   // y 轴网格 + 刻度
   for (let i = 0; i <= 4; i++) {
@@ -2530,31 +2565,25 @@ function renderUsageChart(series) {
            '" text-anchor="start">均值 ' + fmtTokShort(avg) + '</text>';
   }
 
-  // 柱子
+  // 曲线：prompt / completion 各一条（同原来的两个系列，不再堆叠）。
+  // 用 Catmull-Rom 转三次贝塞尔做平滑，曲线经过每个真实数据点。
   const yBase = PT + ih;
+  const lineP = [], lineC = [];
   for (const p of pts) {
-    const x = xOf(p.t) - bw / 2;
-    const hTot = ih * (p.tt / max);
-    const hP = p.tt ? hTot * (p.pt / p.tt) : 0;
-    const hC = Math.max(p.tt && p.ct ? 1 : 0, hTot - hP);
-    // 圆角只给堆叠顶端（贴轴的底边保持方角，柱子才像"立"在基线上）。
-    // 类名用 usbar 而不是 bar：账号池的积分条是 .bar{height:3px}，而 SVG2 里
-    // height 是 rect 的 CSS 几何属性，同名类会把每根柱子压成 3px 高（踩过）。
-    // 每根柱子一个 <g>，<title> 作为它的**子元素**：
-    //   - <title> 只有作为元素的子节点才是那个元素的悬停提示；挂在 <svg> 根下时浏览器
-    //     把它当整图的说明，于是**所有柱子都显示最后一条数据**（issue #128 的
-    //     「细节数据好像所有柱状图都相同」）。
-    //   - 两个 rect（prompt/completion 堆叠）共用一个 <title>，悬停任一段都是同一份明细。
-    out += '<g><title>' + esc(p.raw) + '  ' + fmtTokShort(p.pt) + ' prompt / ' +
-           fmtTokShort(p.ct) + ' completion / ' + p.req + ' 次</title>';
-    if (hP > 0) out += '<rect class="usbar" x="' + x.toFixed(2) + '" y="' + (yBase - hP).toFixed(2) +
-      '" width="' + bw.toFixed(2) + '" height="' + hP.toFixed(2) +
-      '" fill="url(#usGradP)"' + (hC > 0 ? '' : ' rx="1.5"') + '/>';
-    if (hC > 0) out += '<rect class="usbar" x="' + x.toFixed(2) + '" y="' + (yBase - hP - hC).toFixed(2) +
-      '" width="' + bw.toFixed(2) + '" height="' + hC.toFixed(2) +
-      '" fill="url(#usGradC)" rx="1.5"/>';
-    out += '</g>';
+    lineP.push({ x: xOf(p.t), y: yOf(p.pt) });
+    lineC.push({ x: xOf(p.t), y: yOf(p.ct) });
   }
+  if (lineP.length > 1) {
+    out += '<path class="usline-p" d="' + smoothPath(lineP) + '"/>';
+    out += '<path class="usline-c" d="' + smoothPath(lineC) + '"/>';
+  } else {
+    // 单点窗口连不成线：退化成圆点。
+    out += '<circle class="usdot-p" cx="' + lineP[0].x.toFixed(1) + '" cy="' + lineP[0].y.toFixed(1) + '" r="2.5"/>';
+    out += '<circle class="usdot-c" cx="' + lineC[0].x.toFixed(1) + '" cy="' + lineC[0].y.toFixed(1) + '" r="2.5"/>';
+  }
+
+  // 悬停层：圆点与竖向参考线在 mousemove 里实时填充（见函数尾）。
+  out += '<g id="usHover"></g>';
 
   // 峰值标注：柱子够窄时文字压在柱顶，够宽时贴右侧避免和柱体重叠。
   {
@@ -2572,7 +2601,9 @@ function renderUsageChart(series) {
 
   // x 轴刻度：按真实时间等距取 6 个位置，取该位置**最近的实际柱子**做标签，
   // 所以标签永远落在有数据的点上，不会指到空档里。
-  const TICKS = Math.min(6, pts.length);
+  // 刻度数量跟着点数走：一个标签约需 62px（"10月15日" 五个字 + 间距），
+  // 15 天窗口正好逐日都有标签；点太多（30 天+）才退化到按宽度上限抽稀。
+  const TICKS = Math.min(pts.length, Math.max(2, Math.floor(iw / 62)));
   const usedLabel = new Set();
   for (let k = 0; k < TICKS; k++) {
     const target = t0 + span * (TICKS === 1 ? 0.5 : k / (TICKS - 1));
@@ -2625,6 +2656,70 @@ function renderUsageChart(series) {
 
   out += '</svg>';
   host.innerHTML = out;
+
+  // ---- 悬停实时提示 ----
+  // 原生 <title> 有约 1 秒延迟、样式不可控，这里改成鼠标一动就重算的 HTML 卡片：
+  // 按 x 找最近的时间点（曲线是平滑 path，靠元素命中拿不到"这一天"），命中的那一列
+  // 画圆点与竖线，卡片实时跟随鼠标。
+  //
+  // 两个必须处理的坑：
+  //   · 用量页每秒轮询重渲染（usTimer），host.innerHTML 一换 svg 就没了，卡片挂在
+  //     host 里会被连带清掉 → 表现为「弹窗闪一下就没」。所以卡片挂父容器 .uschart
+  //     并复用。
+  //   · 同一原因，鼠标不动时不会再有 mousemove → 记下最后的 clientX，重渲染后主动
+  //     重算一帧，卡片与高亮点才不会停在上一帧。
+  const tipHost = host.parentNode || host;
+  let tip = tipHost.querySelector('.us-tip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.className = 'us-tip';
+    tipHost.appendChild(tip);
+  }
+  const svgEl = host.querySelector('svg');
+  const hoverG = host.querySelector('#usHover');
+  if (!svgEl || !hoverG) return;
+
+  const hideTip = () => { hoverG.innerHTML = ''; tip.style.display = 'none'; };
+
+  const drawTip = (clientX) => {
+    const r = svgEl.getBoundingClientRect();
+    if (!r.width || !r.height) { hideTip(); return; }
+    const vx = (clientX - r.left) / r.width * W;
+    if (vx < PL - 10 || vx > W - PR + 10) { hideTip(); return; }
+    let bi = 0, best = Infinity;
+    for (let i = 0; i < pts.length; i++) {
+      const d = Math.abs(xOf(pts[i].t) - vx);
+      if (d < best) { best = d; bi = i; }
+    }
+    const p = pts[bi], cx = xOf(p.t).toFixed(1);
+    hoverG.innerHTML =
+      '<line x1="' + cx + '" y1="' + PT + '" x2="' + cx + '" y2="' + (PT + ih) +
+        '" stroke="#94a3b8" stroke-width="1" stroke-dasharray="3 3" opacity=".55"/>' +
+      '<circle class="usdot-p" cx="' + cx + '" cy="' + yOf(p.pt).toFixed(1) + '" r="3.5"/>' +
+      '<circle class="usdot-c" cx="' + cx + '" cy="' + yOf(p.ct).toFixed(1) + '" r="3.5"/>';
+    const rate = (p.ch + p.cm) > 0 ? p.ch / (p.ch + p.cm) : null;
+    tip.innerHTML =
+      '<div class="us-tip-d">' + esc(fmtTokTimeLabel({ t: p.t, scope: 'day' })) + '</div>' +
+      '<div class="us-tip-r"><i style="background:var(--accent)"></i><span>输入</span><b>' +
+        fmtTokShort(p.pt) + '</b></div>' +
+      '<div class="us-tip-r"><i style="background:var(--ok)"></i><span>输出</span><b>' +
+        fmtTokShort(p.ct) + '</b></div>' +
+      '<div class="us-tip-r"><span>请求</span><b>' + p.req + ' 次</b></div>' +
+      (rate === null ? '' :
+        '<div class="us-tip-r"><span>缓存命中</span><b>' + trimFixed((rate * 100).toFixed(1)) + '%</b></div>');
+    tip.style.display = 'block';
+    // 卡片相对 .uschart 定位，cx 是 svg viewBox 坐标，用两个矩形的差补上 padding。
+    const box = tipHost.getBoundingClientRect();
+    const tw = tip.offsetWidth || 170;
+    const left = (r.left - box.left) + cx / W * r.width + 12;
+    const maxLeft = Math.max(6, box.width - tw - 6);
+    tip.style.left = Math.min(maxLeft, Math.max(6, left)) + 'px';
+    tip.style.top = (r.top - box.top + 10) + 'px';
+  };
+
+  host.onmouseleave = () => { host._lastX = null; hideTip(); };
+  host.onmousemove = (e) => { host._lastX = e.clientX; drawTip(e.clientX); };
+  if (typeof host._lastX === 'number') drawTip(host._lastX);
 }
 
 // fmtTokTip 图表 tooltip 的数值格式（与柱体标签同口径；前端测试以此为切片标记）。
@@ -2715,6 +2810,26 @@ function renderUsageLive(ov) {
    loadUsage 用 usBusy 防堆叠（1 秒档常见：上一轮没返回就跳过本轮，不排队）。 */
 let usTimer = null;
 let usBusy = false;
+
+// Token 时序自己的窗口（'15' | '30' 天），与页头「用量总览」的 trange 下拉无关：
+// 下拉管的是 KPI/明细/积分，图只看趋势，默认 15 天。
+// 数据带 30 秒缓存——图表的窗口不常变，没必要跟着 1 秒轮询每帧重查一遍全表。
+let usChartWin = '15';
+let usChartCache = { win: '', at: 0, data: null };
+
+async function fetchChartUsage() {
+  const now = Date.now();
+  if (usChartCache.data && usChartCache.win === usChartWin && now - usChartCache.at < 30000) {
+    return usChartCache.data;
+  }
+  try {
+    const d = await api(usChartWin === '30' ? 'usage?hours=720' : 'usage?hours=360');
+    usChartCache = { win: usChartWin, at: now, data: d };
+    return d;
+  } catch (e) {
+    return usChartCache.data; // 失败沿用上一份，图不闪空
+  }
+}
 function usAutoStop() { if (usTimer) { clearInterval(usTimer); usTimer = null; } }
 function usAutoStart() {
   usAutoStop();
@@ -2727,12 +2842,15 @@ async function loadUsage() {
   const q = trangeQuery('usRange', true);
   try {
     await warmUsageModelRates();
-    const [d, ov] = await Promise.all([
+    const [d, ov, chart] = await Promise.all([
       api('usage?' + q.toString()),
       api('overview').catch(() => null), // 使用状态卡数据源；单独失败不拖累用量刷新
+      // Token 时序走自己的窗口（默认 15 天，可切全部历史），不跟顶部下拉。
+      fetchChartUsage(),
     ]);
     renderUsage(d);
     renderUsageLive(ov);
+    renderUsageChart(((chart || d) || {}).series || []);
   } catch (e) {
     // 失败时三块都要清干净：只改图表会留下上一次窗口的数字，看起来像"刷新成功"。
     usageData = null;
@@ -2756,7 +2874,20 @@ async function loadUsage() {
 
 if ($('btnUsage')) $('btnUsage').onclick = loadUsage;
 // 时间范围控件绑定：任何改动（预设切换 / 自定义起止）都重新拉一次用量。
+// 用量页顶部下拉仍用全局默认（today）：总览 KPI / 明细表 / 积分表都跟它走。
+// Token 时序不受它控制——那张图有自己的一组胶囊按钮（15 天 / 全部历史）。
 if ($('usRange')) trangeBind('usRange', loadUsage);
+
+// Token 时序的窗口胶囊：切了立刻作废缓存并重取，不用等下一轮 1 秒轮询。
+if ($('usChartWin')) $('usChartWin').addEventListener('click', ev => {
+  const b = ev.target.closest('button[data-win]');
+  if (!b || b.classList.contains('on')) return;
+  usChartWin = b.dataset.win;
+  [...$('usChartWin').querySelectorAll('button')].forEach(x =>
+    x.classList.toggle('on', x === b));
+  usChartCache.at = 0;
+  loadUsage();
+});
 
 /* ── 积分构成 ─────────────────────────────────────────────────────── */
 // 套餐标签（后端 pool.ClassifyPlan 判定，unknown 不显示）：一眼看出该指望哪个号。
@@ -2926,7 +3057,9 @@ function renderExpiryDistribution(list, now) {
     const total = row.credits || 1;
     const nodes = row.segments.map(segment => {
       const color = colors.get(segment.uid) || 'var(--accent)';
-      const title = segment.source + '\n' + fmtTok(segment.amount) + ' 积分\n到期时间 ' +
+      // 积分走 fmtCredit（原值，去尾零），不是 fmtTok——积分不是 token，
+      // 套亿/万制会把「18500 积分」显示成「1.85万 积分」。
+      const title = segment.source + '\n' + fmtNum(segment.amount) + ' 积分\n到期时间 ' +
         pkExpiryDateTime(segment.expiresAt) + '（' + pkExpiryText(segment.expiresAt) + '）\n' +
         segment.accountName;
       return '<span class="pk-expiry-seg" style="--seg-color:' + color +
@@ -2935,7 +3068,7 @@ function renderExpiryDistribution(list, now) {
         ' 1 0" title="' + esc(title) + '" aria-label="' + esc(title) + '"></span>';
     }).join('');
     return '<div class="pk-expiry-row"><span>' + esc(row.days === 0 ? '已到期' : row.days + ' 天') +
-      '</span><div class="pk-expiry-track">' + nodes + '</div><b>' + esc(fmtTok(row.credits)) +
+      '</span><div class="pk-expiry-track">' + nodes + '</div><b>' + esc(fmtNum(row.credits)) +
       '</b></div>';
   }).join('');
   const foot = summary.accountCount + ' 个账号' +
@@ -3031,18 +3164,18 @@ function renderPackages(d, detailLimit) {
     const total = Math.max(1, Number(a.size || 0));
     const bar = srcs.map(s =>
       '<i style="width:' + (s.size / total * 100).toFixed(2) + '%;background:' +
-      colorOf(s.key) + '" title="' + esc(s.name) + ' ' + fmtTok(s.size) + '"></i>'
+      colorOf(s.key) + '" title="' + esc(s.name) + ' ' + fmtNum(s.size) + '"></i>'
     ).join('');
     const legend = srcs.map(s =>
       '<span><i style="background:' + colorOf(s.key) + '"></i>' +
-      esc(s.name.replace(/^CodeBuddy/, '')) + ' x' + s.n + ' · ' + fmtTok(s.size) +
+      esc(s.name.replace(/^CodeBuddy/, '')) + ' x' + s.n + ' · ' + fmtNum(s.size) +
       (s.minCreated ? ' · 首发 ' + esc(s.minCreated.slice(5)) : '') + '</span>'
     ).join('');
     return '<div class="pk-card">' +
       '<div class="who"><span class="nm">' + esc(a.nickname || a.uid.slice(0, 8)) + '</span>' +
       '<span class="realm">' + esc(a.realm || '') + '</span></div>' +
-      '<div class="big">' + fmtTok(a.remain) + '</div>' +
-      '<div class="sub">共 ' + fmtTok(a.size) + ' · ' + (a.packages || []).length +
+      '<div class="big">' + fmtNum(a.remain) + '</div>' +
+      '<div class="sub">共 ' + fmtNum(a.size) + ' · ' + (a.packages || []).length +
       ' 个包 · 占最高 ' + (Number(a.remain || 0) / maxRemain * 100).toFixed(0) + '%' +
       (PLAN_LABELS[a.plan] ? ' · ' + PLAN_LABELS[a.plan] : '') + '</div>' +
       '<div class="mixbar">' + bar + '</div>' +
@@ -3066,9 +3199,9 @@ function renderPackages(d, detailLimit) {
         colorOf(k) + '"></i></td>' +
       '<td>' + esc(p.name || '(未命名)') +
         (sub ? '<div class="note">' + esc(sub) + '</div>' : '') + '</td>' +
-      '<td class="num">' + fmtTok(p.size) + '</td>' +
-      '<td class="num">' + fmtTok(p.remain) + '</td>' +
-      '<td class="num">' + fmtTok(p.used) + '</td>' +
+      '<td class="num">' + fmtNum(p.size) + '</td>' +
+      '<td class="num">' + fmtNum(p.remain) + '</td>' +
+      '<td class="num">' + fmtNum(p.used) + '</td>' +
       '<td class="num">' + esc((p.created_at || '').slice(0, 16).replace('T', ' ') || '—') + '</td>' +
       '<td class="num">' + esc((p.end_time || '').slice(0, 10) || '—') + '</td>' +
       '</tr>';
@@ -3080,19 +3213,19 @@ function renderPackages(d, detailLimit) {
     const rows = groups.visible.map(p => rowOf(p, '')).join('');
     const restSummary = groups.rest.length
       ? groupSummary('rest', '其余未用完 ' + groups.rest.length + ' 个包（面额合计 ' +
-          fmtTok(groups.restSize) + ' · 剩余 ' + fmtTok(groups.restRemain) + '）',
+          fmtNum(groups.restSize) + ' · 剩余 ' + fmtNum(groups.restRemain) + '）',
           groups.rest.length, groups.restSize, groups.restRemain) +
         groups.rest.map(p => rowOf(p, 'rest')).join('')
       : '';
     const usedSummary = groups.used.length
       ? groupSummary('used', '已用完 ' + groups.used.length + ' 个包（面额合计 ' +
-          fmtTok(groups.usedSize) + '）', groups.used.length, groups.usedSize, 0) +
+          fmtNum(groups.usedSize) + '）', groups.used.length, groups.usedSize, 0) +
         groups.used.map(p => rowOf(p, 'used')).join('')
       : '';
     return '<div class="box"><header><h3>' +
       esc(a.nickname || a.uid.slice(0, 8)) + ' · ' + esc(a.realm || '') +
-      '</h3><span class="grow"></span><span class="note">余额 ' + fmtTok(a.remain) +
-      ' / 总额 ' + fmtTok(a.size) + ' · 可用 ' + (groups.visible.length + groups.rest.length) + ' 个包' +
+      '</h3><span class="grow"></span><span class="note">余额 ' + fmtNum(a.remain) +
+      ' / 总额 ' + fmtNum(a.size) + ' · 可用 ' + (groups.visible.length + groups.rest.length) + ' 个包' +
       (groups.used.length ? ' / 已用完 ' + groups.used.length + ' 个' : '') +
       ' · 默认展示最早到期 ' + pkDetailLimitValue(detailLimit) + ' 条</span>' +
       '</header><div class="tbl-wrap"><table class="acc"><thead><tr>' +
@@ -3117,12 +3250,12 @@ if ($('pkDetail')) $('pkDetail').addEventListener('click', ev => {
   btn.setAttribute('aria-expanded', String(!expanded));
   if (group === 'rest') {
     btn.textContent = expanded
-      ? '其余未用完 ' + count + ' 个包（面额合计 ' + fmtTok(size) + ' · 剩余 ' +
-        fmtTok(remain) + '），展开'
+      ? '其余未用完 ' + count + ' 个包（面额合计 ' + fmtNum(size) + ' · 剩余 ' +
+        fmtNum(remain) + '），展开'
       : '收起其余未用完 ' + count + ' 个包';
   } else {
     btn.textContent = expanded
-      ? '已用完 ' + count + ' 个包（面额合计 ' + fmtTok(size) + '），展开'
+      ? '已用完 ' + count + ' 个包（面额合计 ' + fmtNum(size) + '），展开'
       : '收起已用完 ' + count + ' 个包';
   }
 });
@@ -3221,15 +3354,15 @@ function renderExpirySnapshot(d) {
     const dayWord = days === 0 ? '今天到期' : days === 1 ? '明天到期' : days + ' 天内到期';
     const more = bs.length > 4 ? '　等 ' + bs.length + ' 批' : '';
     const rest = bs.slice(1, 4).map(b =>
-      '随后 ' + esc(b.date.slice(5)) + ' · <span style="color:' + eCls(expDayDiff(b.date)) + '">' + fmtTok(b.remain) + '</span>').join('　') + more;
+      '随后 ' + esc(b.date.slice(5)) + ' · <span style="color:' + eCls(expDayDiff(b.date)) + '">' + fmtNum(b.remain) + '</span>').join('　') + more;
     agg.n++; agg.sumW += week; // week = 该号 7 天内到期批次合计（可为 0）
     if (days < agg.minDays) { agg.minDays = days; agg.minDate = first.date; agg.minName = nm; }
     return '<div class="exp-row"><span class="exp-dot" style="background:' + cls + '"></span>' +
       '<span class="exp-nm">' + nm + '</span>' +
       '<span class="exp-main">最近到期 <b>' + esc(first.date) + '</b>（' + dayWord +
-      '）· 该批 <b style="color:' + cls + '">' + fmtTok(first.remain) + '</b> 积分 · 到期前日均需耗 ≥<b style="color:' + cls + '">' +
-      fmtTok(daily) + '</b>' +
-      (week > first.remain ? ' · 7 天内合计 <b style="color:' + cls + '">' + fmtTok(week) + '</b>' : '') +
+      '）· 该批 <b style="color:' + cls + '">' + fmtNum(first.remain) + '</b> 积分 · 到期前日均需耗 ≥<b style="color:' + cls + '">' +
+      fmtNum(daily) + '</b>' +
+      (week > first.remain ? ' · 7 天内合计 <b style="color:' + cls + '">' + fmtNum(week) + '</b>' : '') +
       (rest ? '<div class="note">' + rest + '</div>' : '') +
       '</span></div>';
   }).join('');
@@ -3239,7 +3372,7 @@ function renderExpirySnapshot(d) {
     const scls = eCls(agg.minDays);
     const sword = agg.minDays === 0 ? '今天到期' : agg.minDays === 1 ? '明天到期' : agg.minDays + ' 天内到期';
     sum = '<div class="exp-sumline"><span class="exp-dot" style="background:' + scls + '"></span>' +
-      '<span>最早到期 <b>' + esc(agg.minDate) + '</b>（' + sword + ' · ' + esc(agg.minName) + '）· 最近7天内批次合计 <b class="r">' + fmtTok(agg.sumW) + '</b> 分 · 到期前日均需耗 ≥<b class="r">' + fmtTok(Math.ceil(agg.sumW / 7)) + '</b>' +
+      '<span>最早到期 <b>' + esc(agg.minDate) + '</b>（' + sword + ' · ' + esc(agg.minName) + '）· 最近7天内批次合计 <b class="r">' + fmtNum(agg.sumW) + '</b> 分 · 到期前日均需耗 ≥<b class="r">' + fmtNum(Math.ceil(agg.sumW / 7)) + '</b>' +
       '<span class="note">' + agg.n + ' 个号' + (excluded ? '（不含 ' + excluded + ' 个禁用号）' : '') + ' · 悬停看逐号明细</span></span></div>' +
       '<div class="exp-pop">' + rows + '</div>';
   }
@@ -3580,7 +3713,7 @@ function renderCompensation() {
       const act = compPending(r)
         ? '<button class="xs" data-comp="' + esc(r.uid) + '">领取</button>' : '';
       return '<tr' + (hidden ? ' data-exp-row="rest" hidden' : '') + '><td>' + who + '</td><td>' + state + '</td>' +
-        '<td class="num">' + (r.credit ? fmtTok(r.credit) : '—') + '</td>' +
+        '<td class="num">' + (r.credit ? fmtNum(r.credit) : '—') + '</td>' +
         '<td class="num">' + remain + '</td>' +
         '<td class="c-acts">' + act + '</td></tr>';
   };
@@ -3598,7 +3731,7 @@ function renderCompensation() {
   const erred = Number((compData && compData.errored) || 0);
   // 失败数必须显形：全失败时若只报「没有待领」，等于把故障说成「没活动」。
   $('compNote').innerHTML = !compData ? ''
-    : (pend.length ? '待领 ' + pend.length + ' 个 · 合计 ' + fmtTok(sum) + ' 积分' : '无待领补偿')
+    : (pend.length ? '待领 ' + pend.length + ' 个 · 合计 ' + fmtNum(sum) + ' 积分' : '无待领补偿')
       + (erred ? ' · <span style="color:var(--bad)">' + erred + ' 个查询失败</span>' : '');
 }
 

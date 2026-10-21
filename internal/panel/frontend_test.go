@@ -136,20 +136,20 @@ func TestAppJSCreditDimensionFormatting(t *testing.T) {
 	script := `const fs = require('fs');
 const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-	const start = src.indexOf('function trimFixed');
+const start = src.indexOf('function fmtNum');
 const end = src.indexOf('function usStat');
 if (start < 0 || end < 0) throw new Error('credit helpers not found');
 const ctx = { Number, String, RegExp };
 vm.createContext(ctx);
 vm.runInContext(
   src.slice(start, end) +
-  '\nthis.fmtCredit=fmtCredit; this.fmtCreditRatio=fmtCreditRatio; this.fmtModelRate=fmtModelRate;',
+  '\nthis.fmtNum=fmtNum; this.fmtCreditRatio=fmtCreditRatio; this.fmtModelRate=fmtModelRate;',
   ctx
 );
 process.stdout.write(JSON.stringify({
-  credit: ctx.fmtCredit(1.25),
-  zero: ctx.fmtCredit(0),
-  hundred: ctx.fmtCredit(100),
+  credit: ctx.fmtNum(1.25),
+  zero: ctx.fmtNum(0),
+  hundred: ctx.fmtNum(100),
   ratio: ctx.fmtCreditRatio(12.5, 2, 400),
   noSamples: ctx.fmtCreditRatio(12.5, 0, 400),
   noTokens: ctx.fmtCreditRatio(12.5, 2, 0),
@@ -448,10 +448,10 @@ process.stdout.write(JSON.stringify({
 	}
 	// 末段「思考=」：有档位输出原值，缺省输出 -（与 stdout 日志同口径，便于对照排查）。
 	// noSource/cached 都用展开继承 good，故同样带 effort=high；noEffort 显式置空验证缺省分支。
-	text := "14:05:06 | 200 成功 | glm-5.3 | 账号(uid8) | 203.0.113.7 | python-requests/2.31.0 | 1.25s | 2.3k tok | 0.12 credit | req-1 | 思考=high"
-	noSource := "14:05:06 | 200 成功 | glm-5.3 | 账号(uid8) | — | — | 1.25s | 2.3k tok | 0.12 credit | req-3 | 思考=high"
-	cached := "14:05:06 | 200 成功 | glm-5.3 | 账号(uid8) | 203.0.113.7 | python-requests/2.31.0 | 1.25s | 2.3k tok | 0.12 credit | 命中 98.1% | req-2 | 思考=high"
-	noEffort := "14:05:06 | 200 成功 | glm-5.3 | 账号(uid8) | 203.0.113.7 | python-requests/2.31.0 | 1.25s | 2.3k tok | 0.12 credit | req-4 | 思考=-"
+	text := "14:05:06 | 200 成功 | glm-5.3 | 账号(uid8) | 203.0.113.7 | python-requests/2.31.0 | 1.25s | 2300 tok | 0.12 credit | req-1 | 思考=high"
+	noSource := "14:05:06 | 200 成功 | glm-5.3 | 账号(uid8) | — | — | 1.25s | 2300 tok | 0.12 credit | req-3 | 思考=high"
+	cached := "14:05:06 | 200 成功 | glm-5.3 | 账号(uid8) | 203.0.113.7 | python-requests/2.31.0 | 1.25s | 2300 tok | 0.12 credit | 命中 98.1% | req-2 | 思考=high"
+	noEffort := "14:05:06 | 200 成功 | glm-5.3 | 账号(uid8) | 203.0.113.7 | python-requests/2.31.0 | 1.25s | 2300 tok | 0.12 credit | req-4 | 思考=-"
 	want := `{"good":` + strconv.Quote(text) + `,"noSource":` + strconv.Quote(noSource) + `,"cached":` + strconv.Quote(cached) + `,"noEffort":` + strconv.Quote(noEffort) + `}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("request log formatting=%s want %s", out, want)
@@ -700,43 +700,59 @@ func TestAppJSUsageChartBarClass(t *testing.T) {
 	script := `const fs = require('fs');
 const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-const start = src.indexOf('function parsePointTime');
+const start = src.indexOf('function smoothPath');
 const end = src.indexOf('function fmtTokTip');
 const escStart = src.indexOf('function esc(');
 const escEnd = src.indexOf('function ago(');
 const fmtStart = src.indexOf('function fmtTok(');
 const fmtEnd = src.indexOf('function usStat(');
 if ([start, end, escStart, escEnd, fmtStart, fmtEnd].some(v => v < 0)) throw new Error('usage chart helpers not found');
-const host = { innerHTML: '', textContent: '' };
+// 悬停卡片挂在父容器（每秒重渲染不会连它一起清掉），mock 必须给出 parentNode。
+const tipHost = {
+  children: [],
+  querySelector: () => null,
+  appendChild(c) { this.children.push(c); },
+  getBoundingClientRect: () => ({ width: 1200, height: 200, left: 0, top: 0 }),
+};
+const host = {
+  innerHTML: '', textContent: '', children: [], parentNode: tipHost,
+  appendChild(c) { this.children.push(c); },
+  querySelector() {
+    return { innerHTML: '', getBoundingClientRect: () => ({ width: 1200, height: 200, left: 0, top: 0 }) };
+  },
+};
 const ctx = {
   Date, Number, String, Math, RegExp, isNaN, Set, Array, Object, Infinity,
-  document: { getElementById: () => host },
+  document: {
+    getElementById: () => host,
+    createElement: () => ({ className: '', style: {}, innerHTML: '', offsetWidth: 0 }),
+  },
   $: () => host,
 };
 vm.createContext(ctx);
 vm.runInContext(src.slice(escStart, escEnd) + src.slice(fmtStart, fmtEnd) + src.slice(start, end) +
   '\nthis.renderUsageChart=renderUsageChart;', ctx);
+// 三天各一个 day 桶：折叠逻辑要求跨天数据才画得出曲线（同一天的小时桶会被合并成一点）。
 const series = [
-  { t: '2026-09-30T09', scope: 'hour', prompt_tokens: 35, completion_tokens: 16, total_tokens: 51, requests: 1 },
-  { t: '2026-09-30T11', scope: 'hour', prompt_tokens: 978324, completion_tokens: 20621, total_tokens: 998945, requests: 39 },
-  { t: '2026-09-30T13', scope: 'hour', prompt_tokens: 27400952, completion_tokens: 104913, total_tokens: 27505865, requests: 200 },
+  { t: '2026-09-28', scope: 'day', prompt_tokens: 35, completion_tokens: 16, total_tokens: 51, requests: 1 },
+  { t: '2026-09-29', scope: 'day', prompt_tokens: 978324, completion_tokens: 20621, total_tokens: 998945, requests: 39 },
+  { t: '2026-09-30', scope: 'day', prompt_tokens: 27400952, completion_tokens: 104913, total_tokens: 27505865, requests: 200 },
 ];
 ctx.renderUsageChart(series);
 const svg = host.innerHTML;
 process.stdout.write(JSON.stringify({
-  hasUsbar: svg.includes('class="usbar"'),
-  hasBareBar: /class="bar"/.test(svg),
-  hasGradient: svg.includes('usGradP') && svg.includes('usGradC'),
-  barCount: (svg.match(/class="usbar"/g) || []).length,
+  // 形态：prompt / completion 各一条平滑曲线（<path>），不再是柱子。
+  hasLineP: svg.includes('class="usline-p"'),
+  hasLineC: svg.includes('class="usline-c"'),
+  isSmooth: /class="usline-p" d="M[0-9.]+,[0-9.]+ C/.test(svg),
+  hasBar: svg.includes('class="usbar"'),
   hasPeak: svg.includes('峰值'),
   hasAvg: svg.includes('均值'),
-  // 每根柱子一条自己的 <title>，且每条都是该点的数据（悬停不再全部显示最后一条）。
-  barTitles: (svg.match(/<g><title>/g) || []).length,
-  bareTitles: (svg.match(/<title>/g) || []).length - (svg.match(/<g><title>/g) || []).length,
-  titleHasOwnReq: (function () {
-    const ts = [...svg.matchAll(/<g><title>([^<]*)<\/title>/g)].map(m => m[1]);
-    return ts.length === 3 && ts.some(x => x.includes('1 次')) && ts.some(x => x.includes('39 次')) && ts.some(x => x.includes('200 次'));
-  })(),
+  // 悬停改为实时 HTML 卡片（原生 <title> 有 ~1 秒延迟），并带一个空的悬停层
+  // 供 mousemove 动态填圆点与竖线。
+  hasHover: svg.includes('id="usHover"'),
+  hasTip: tipHost.children.some(c => c.className === 'us-tip'),
+  hasTitle: svg.includes('<title>'),
   emptyState: (function () { ctx.renderUsageChart([]); return host.innerHTML.includes('us-empty'); })(),
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "usage-chart-*.cjs")
@@ -751,8 +767,9 @@ process.stdout.write(JSON.stringify({
 	if err != nil {
 		t.Fatalf("usage chart node test failed: %v\n%s", err, out)
 	}
-	const want = `{"hasUsbar":true,"hasBareBar":false,"hasGradient":true,"barCount":6,"hasPeak":true,"hasAvg":true,` +
-		`"barTitles":3,"bareTitles":0,"titleHasOwnReq":true,"emptyState":true}`
+	const want = `{"hasLineP":true,"hasLineC":true,"isSmooth":true,"hasBar":false,` +
+		`"hasPeak":true,"hasAvg":true,"hasHover":true,"hasTip":true,"hasTitle":false,` +
+		`"emptyState":true}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("usage chart=%s\nwant %s", out, want)
 	}
@@ -776,7 +793,10 @@ if (start < 0 || end < 0 || end < start) throw new Error('trange helpers not fou
 const host = { innerHTML: '' };
 const ctx = {
   Date, Number, String, Math, Map, Array, Object, isNaN, URLSearchParams,
-  document: { getElementById: () => host },
+  document: {
+    getElementById: () => host,
+    createElement: () => ({ className: '', style: {}, innerHTML: '', offsetWidth: 0 }),
+  },
   $: () => host,
   esc: s => String(s == null ? '' : s),
 };
@@ -1117,7 +1137,7 @@ func TestUsageChartSingleLegend(t *testing.T) {
 	if n := strings.Count(hd, `class="legend"`); n != 1 {
 		t.Errorf("Token 时序卡头应只有 1 条图例，实际 %d 条（重复图例=同一张图两种口径）", n)
 	}
-	for _, item := range []string{"prompt", "completion", "缓存命中率", "均值"} {
+	for _, item := range []string{"输入", "输出", "缓存命中率", "均值"} {
 		if n := strings.Count(hd, item); n != 1 {
 			t.Errorf("图例项 %q 在卡头出现 %d 次，应为 1 次", item, n)
 		}
@@ -1578,6 +1598,7 @@ const ctx = {
        querySelector: () => null, querySelectorAll: () => [] }),
   esc: s => String(s == null ? '' : s),
   fmtTok: v => String(v == null ? 0 : v),
+  fmtNum: v => String(v == null ? 0 : v),
   pkExpiryDateTime: ms => new Date(ms).toISOString(),   // 只取前 10 位，时区口径由真函数负责
 };
 vm.createContext(ctx);
@@ -1764,6 +1785,7 @@ const ctx = {
   $: el,
   esc: (s) => String(s == null ? '' : s),
   fmtTok: (n) => String(n),
+  fmtNum: (n) => String(n),
   toast: () => {},
   api: async () => ({}),
 };
@@ -2097,7 +2119,7 @@ const ctx = {
   Number, String, Array, Date, Math, JSON, PK_DAY_MS: 86400000,
   expList: { innerHTML: '', textContent: '', querySelector: () => null, querySelectorAll: () => [] },
   expNote: { textContent: '' },
-  esc: s => String(s), fmtTok: n => String(n),
+  esc: s => String(s), fmtTok: n => String(n), fmtNum: n => String(n),
   pkExpiryDateTime: ms => new Date(ms).toISOString(),
 };
 ctx.$ = id => ctx[id];
@@ -2180,6 +2202,7 @@ vm.runInContext(
   src.slice(hs, he) +
   '\nconst esc = s => String(s);' +
   '\nconst fmtTok = n => String(n);' +
+  '\nconst fmtNum = n => String(n);' +
   '\nconst fmtMs = n => String(n);' +
   '\nconst fmtRate = n => String(n);' +
   '\nconst fmtHit = () => "50%";' +

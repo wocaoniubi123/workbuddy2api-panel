@@ -476,14 +476,27 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
     background: var(--line); margin-top: 7px; }
   .kpi .kbar i { display: block; height: 100%; min-width: 2px; }
 
-  .uschart { border: 1px solid var(--line-soft); border-radius: 10px; overflow: hidden;
-    background: var(--surface-2); }
+  .uschart { position: relative; border: 1px solid var(--line-soft); border-radius: 10px;
+    overflow: hidden; background: var(--surface-2); }
   .uschart-hd { display: flex; align-items: center; gap: 10px; padding: 10px 14px;
     border-bottom: 1px solid var(--line-soft); font-size: 12px; }
   .uschart-hd .lb { color: var(--ink-2); font-weight: 600; }
+  /* 这个卡头的 .grow 一直没有对应选择器（.grow{flex:1} 只在 .topbar / .box>header /
+     .savebar 等处定义过），所以图例和胶囊始终贴着标题、右边留白。补上，靠右排。 */
+  .uschart-hd .grow { flex: 1; }
   .uschart-hd .legend { color: var(--ink-3); font-size: 11.5px; display: flex; align-items: center; gap: 6px; }
   .uschart-hd .legend .sep { width: 1px; height: 11px; background: var(--line); margin: 0 3px; }
   .uschart-hd .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+  /* 图表窗口切换（15 天 / 全部历史）：胶囊分段。只影响这张图，
+     与页头「用量总览」的下拉（总览/明细/积分）互不影响。 */
+  .uschart-hd .seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px;
+    background: rgba(128,128,128,.14); margin-left: 4px; }
+  .uschart-hd .seg button { border: 0; background: transparent; cursor: pointer;
+    color: var(--ink-3); font: inherit; font-size: 11.5px; line-height: 1.5;
+    padding: 2px 10px; border-radius: 999px; transition: background .12s, color .12s; }
+  .uschart-hd .seg button:hover { color: var(--ink-2); }
+  .uschart-hd .seg button.on { background: var(--surface); color: var(--ink);
+    box-shadow: 0 1px 2px rgba(0,0,0,.12); }
   .uschart-hd .sw-p { background: var(--accent); }
   .uschart-hd .sw-c { background: var(--ok); }
   .uschart-hd .sw-hit { background: var(--warn); }
@@ -502,6 +515,25 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .uschart-body .tk-peak { fill: var(--ink-2); font: 600 10px var(--mono); }
   .uschart-body rect.usbar { transition: opacity .12s; }
   .uschart-body rect.usbar:hover { opacity: .78; }
+  /* 时序曲线：prompt / completion 各一条，圆头圆角避免折角处出现尖刺。 */
+  .uschart-body .usline-p { fill: none; stroke: var(--accent); stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round; }
+  .uschart-body .usline-c { fill: none; stroke: var(--ok); stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round; }
+  .uschart-body .usdot-p { fill: var(--accent); }
+  .uschart-body .usdot-c { fill: var(--ok); }
+  /* 悬停卡片：鼠标一动就重算位置与内容（替代原生 <title> 的 ~1 秒延迟）。
+     挂 .uschart 而非图表容器，每秒重渲染不会把它清掉。 */
+  .us-tip { display: none; position: absolute; z-index: 6; min-width: 150px; max-width: 240px;
+    padding: 7px 10px 8px; border-radius: 8px; background: var(--surface);
+    border: 1px solid var(--line-soft); box-shadow: 0 6px 18px rgba(0,0,0,.14);
+    font-size: 12px; pointer-events: none; }
+  .us-tip-d { color: var(--ink-3); font-size: 11px; margin-bottom: 5px; }
+  .us-tip-r { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+  .us-tip-r i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .us-tip-r span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--ink-2); }
+  .us-tip-r b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
   .uschart-body .us-empty { padding: 30px 0; text-align: center; color: var(--ink-3); font-size: 12.5px; }
 
   /* 用量表内的 prompt/completion 占比条。用 .us-mix 而不是复用账号池的 .bar：
@@ -980,8 +1012,14 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <div class="uschart-hd">
               <span class="lb">Token 时序</span>
               <span class="note" id="usChartNote">—</span>
+              <span class="legend"><i class="sw sw-p"></i>输入<i class="sw sw-c"></i>输出<span class="sep"></span><i class="sw sw-hit"></i>缓存命中率<i class="sw sw-t"></i>均值</span>
+              <!-- grow 放在图例之后：图例跟标题排在一起，只把胶囊推到卡片最右 -->
               <span class="grow"></span>
-              <span class="legend"><i class="sw sw-p"></i>prompt<i class="sw sw-c"></i>completion<span class="sep"></span><i class="sw sw-hit"></i>缓存命中率<i class="sw sw-t"></i>均值</span>
+              <!-- 图表自己的窗口：只影响这张图，与页头「用量总览」的下拉无关 -->
+              <span class="seg" id="usChartWin">
+                <button type="button" data-win="15" class="on">近15天</button>
+                <button type="button" data-win="30">近30天</button>
+              </span>
             </div>
             <div id="usChart" class="uschart-body"></div>
           </div>
@@ -995,7 +1033,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <table class="acc">
             <thead><tr>
               <th class="mark" aria-hidden="true"></th><th>时段</th>
-              <th class="num">请求</th><th class="num">Prompt</th><th class="num">Completion</th>
+              <th class="num">请求</th><th class="num">输入</th><th class="num">输出</th>
               <th class="num">合计</th><th class="num">积分</th><th class="num">token/积分</th>
             </tr></thead>
             <tbody id="usHourBody"></tbody>
