@@ -12,12 +12,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
+	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
+	"github.com/misakano7545/workbuddy2api-panel/internal/balance"
+	"github.com/misakano7545/workbuddy2api-panel/internal/cst"
+	"github.com/misakano7545/workbuddy2api-panel/internal/logfmt"
+	"github.com/misakano7545/workbuddy2api-panel/internal/pool"
+	"github.com/misakano7545/workbuddy2api-panel/internal/session"
+	"github.com/misakano7545/workbuddy2api-panel/internal/upstream"
 )
 
 // Config 调度器依赖。
@@ -25,9 +26,12 @@ import (
 // 任务开关用「禁用」命名而非「启用」：零值 Config 即各类任务都启用（hours 回落默认），
 // 与引入开关前的行为逐字一致（老调用方/老测试无需改动）。
 type Config struct {
-	Pool           *pool.Pool
-	Upstream       *upstream.Client
-	CheckinHours   []int // 默认 [9, 21]
+	Pool         *pool.Pool
+	Upstream     *upstream.Client
+	CheckinHours []int // 默认 [9, 21]
+	// Balance 余额采样记录器（可为 nil = 不采样）。
+	// 采样动作挂在 RunBalanceRefreshNow 之后：那里已拿到新鲜余额，不额外打上游。
+	Balance        *balance.Recorder
 	TravelHours    []int // 默认 [9,21]：一趟派出 + 一趟领奖闭环
 	ActivityHours  []int // 默认 [10]
 	KeepaliveHours []int // 默认 [22]
@@ -626,7 +630,7 @@ func (s *Scheduler) runCheckin(ctx context.Context, spread bool) {
 	plan := s.spreadPlan(taskCheckin, spread, cst.Now())
 	expiringSoon := s.ExpiringSoonWindow()
 	includeDisabled := s.includeDisabledInTasks()
-	for _, st := range s.cfg.Pool.List() {
+	for _, st := range plan.order(s.cfg.Pool.List()) {
 		if st.Disabled && !includeDisabled {
 			continue
 		}
@@ -720,7 +724,7 @@ func (s *Scheduler) runActivity(ctx context.Context, spread bool) {
 	plan := s.spreadPlan(taskActivity, spread, cst.Now())
 	first := true
 	includeDisabled := s.includeDisabledInTasks()
-	for _, st := range s.cfg.Pool.List() {
+	for _, st := range plan.order(s.cfg.Pool.List()) {
 		if st.Disabled && !includeDisabled {
 			continue
 		}
@@ -797,7 +801,7 @@ func (s *Scheduler) RunKeepaliveNow() {
 func (s *Scheduler) runKeepalive(ctx context.Context, spread bool) {
 	plan := s.spreadPlan(taskKeepalive, spread, cst.Now())
 	includeDisabled := s.includeDisabledInTasks()
-	for _, st := range s.cfg.Pool.List() {
+	for _, st := range plan.order(s.cfg.Pool.List()) {
 		if st.Disabled && !includeDisabled {
 			continue
 		}
@@ -918,6 +922,14 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 				ExpiryBuckets:     poolExpiryBuckets(buckets),
 				Packages:          poolPackages(packs),
 			})
+			// 余额采样：这里已拿到新鲜余额，顺手记一点（不额外打上游）。
+			// 内部按 30 分钟节流，故多数刷新周期不会落点。
+			if s.cfg.Balance != nil {
+				s.cfg.Balance.SetName(uid, st.Nickname)
+				if s.cfg.Balance.Add(uid, remain) {
+					log.Printf("balance-sample %s: credits=%d", uid, remain)
+				}
+			}
 		}(a, st.UID)
 	}
 	done := make(chan struct{})

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -700,13 +701,25 @@ func TestAppJSUsageChartBarClass(t *testing.T) {
 	script := `const fs = require('fs');
 const vm = require('vm');
 const src = fs.readFileSync(process.argv[2], 'utf8');
-const start = src.indexOf('function smoothPath');
-const end = src.indexOf('function fmtTokTip');
+const smStart = src.indexOf('function smoothPath');
 const escStart = src.indexOf('function esc(');
 const escEnd = src.indexOf('function ago(');
 const fmtStart = src.indexOf('function fmtTok(');
 const fmtEnd = src.indexOf('function usStat(');
-if ([start, end, escStart, escEnd, fmtStart, fmtEnd].some(v => v < 0)) throw new Error('usage chart helpers not found');
+// 起点用 parsePointTime 而不是 renderUsageChart：后者依赖前者，且 parsePointTime 在它前面。
+const chartStart = src.indexOf('function parsePointTime');
+const chartEnd = src.indexOf('function fmtTokTip');
+if ([smStart, escStart, escEnd, fmtStart, fmtEnd, chartStart, chartEnd].some(v => v < 0)) throw new Error('usage chart helpers not found');
+// smoothPath 合并上游后被挪到文件末尾，与 renderUsageChart 不再相邻 —— 按大括号配平单独切出来。
+const smEnd = (function () {
+  let d = 0, j = src.indexOf('{', smStart);
+  for (; j < src.length; j++) {
+    if (src[j] === '{') d++;
+    else if (src[j] === '}') { d--; if (d === 0) return j + 1; }
+  }
+  return -1;
+})();
+if (smEnd < 0) throw new Error('smoothPath body not closed');
 // 悬停卡片挂在父容器（每秒重渲染不会连它一起清掉），mock 必须给出 parentNode。
 const tipHost = {
   children: [],
@@ -730,7 +743,8 @@ const ctx = {
   $: () => host,
 };
 vm.createContext(ctx);
-vm.runInContext(src.slice(escStart, escEnd) + src.slice(fmtStart, fmtEnd) + src.slice(start, end) +
+vm.runInContext(src.slice(escStart, escEnd) + src.slice(fmtStart, fmtEnd) +
+  src.slice(smStart, smEnd) + src.slice(chartStart, chartEnd) +
   '\nthis.renderUsageChart=renderUsageChart;', ctx);
 // 三天各一个 day 桶：折叠逻辑要求跨天数据才画得出曲线（同一天的小时桶会被合并成一点）。
 const series = [
@@ -744,7 +758,9 @@ process.stdout.write(JSON.stringify({
   // 形态：prompt / completion 各一条平滑曲线（<path>），不再是柱子。
   hasLineP: svg.includes('class="usline-p"'),
   hasLineC: svg.includes('class="usline-c"'),
-  isSmooth: /class="usline-p" d="M[0-9.]+,[0-9.]+ C/.test(svg),
+  // 合并上游后 smoothPath 换成了 Fritsch–Carlson 实现，坐标用空格分隔、C 前不带空格。
+  // 断言只认「M 开头且含 C 命令」这个平滑曲线本质，不绑定分隔符形态。
+  isSmooth: /class="usline-p" d="M[^"]*C[0-9.]+/.test(svg),
   hasBar: svg.includes('class="usbar"'),
   hasPeak: svg.includes('峰值'),
   hasAvg: svg.includes('均值'),
@@ -1125,22 +1141,36 @@ func TestUsageChartSingleLegend(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(html)
-	start := strings.Index(body, `class="uschart-hd"`)
+	// 定位「Token 时序」那张图的卡头：页面上有多个 .uschart-hd（余额趋势也用同一套样式），
+	// 只按 class 找会命中第一个（余额水位），导致图例断言永远看到 0 项 ——
+	// 20261021 把「余额趋势」视图插到它前面时即踩到。改用「Token 时序」这个标签文本锚定。
+	start := strings.Index(body, `class="uschart-hd">`)
 	if start < 0 {
 		t.Fatal("index.html 里没有 uschart-hd 卡头")
 	}
-	end := strings.Index(body[start:], "</div>")
-	if end < 0 {
-		t.Fatal("uschart-hd 卡头没有闭合的 </div>")
-	}
-	hd := body[start : start+end]
-	if n := strings.Count(hd, `class="legend"`); n != 1 {
-		t.Errorf("Token 时序卡头应只有 1 条图例，实际 %d 条（重复图例=同一张图两种口径）", n)
-	}
-	for _, item := range []string{"输入", "输出", "缓存命中率", "均值"} {
-		if n := strings.Count(hd, item); n != 1 {
-			t.Errorf("图例项 %q 在卡头出现 %d 次，应为 1 次", item, n)
+	// 从每个 uschart-hd 开始找，选取其片段里含「Token 时序」的那个
+	for {
+		end := strings.Index(body[start:], "</div>")
+		if end < 0 {
+			t.Fatal("uschart-hd 卡头没有闭合的 </div>")
 		}
+		if strings.Contains(body[start:start+end], "Token 时序") {
+			hd := body[start : start+end]
+			if n := strings.Count(hd, `class="legend"`); n != 1 {
+				t.Errorf("Token 时序卡头应只有 1 条图例，实际 %d 条（重复图例=同一张图两种口径）", n)
+			}
+			for _, item := range []string{"输入", "输出", "缓存命中率", "均值"} {
+				if n := strings.Count(hd, item); n != 1 {
+					t.Errorf("图例项 %q 在卡头出现 %d 次，应为 1 次", item, n)
+				}
+			}
+			return
+		}
+		next := strings.Index(body[start+1:], `class="uschart-hd">`)
+		if next < 0 {
+			t.Fatal("未找到「Token 时序」卡头")
+		}
+		start = start + 1 + next
 	}
 }
 
@@ -2235,5 +2265,104 @@ process.stdout.write(JSON.stringify(out));`
 	const want = `{"account":{"head":11,"row":11,"span":11},"model":{"head":8,"row":8,"span":8},"realm":{"head":8,"row":8,"span":8}}`
 	if got != want {
 		t.Fatalf("usage dim counts=%s want %s", got, want)
+	}
+}
+
+// TestAppJSAllCalledFunctionsDefined 钉住「app.js 里被调用的函数都必须在同一文件里有定义」。
+//
+// 为什么需要（20261021 实证）：迁移到 miskano7545 分支时，balance 模块的 JS 是按
+// 「函数名白名单」手工挑出来搬的，结果漏掉了被调用的底层工具 —— measureWidth /
+// lineWidthFor / smoothPath / realmLabel / CHK_FALLBACK_W / fmtNum / fmtTokens。
+// 现象：切到「余额趋势」页，视图能显示、标题正确、浏览器控制台**没有任何报错**，
+// 只是表格 0 行、图表空白（loadBalance 内部的 try/catch 把异常吞了）。
+// 现有守卫全都抓不到：TestAppJSSyntax 只查语法（未定义标识符是合法语法），
+// TestAppJSTopLevelSmoke 只求值顶层（漏掉的函数只在点击后才调用）。
+//
+// 判据说明：只查「函数调用形态」—`name(` —— 并要求 name 满足以下之一：
+//
+//	a) 本文件里有定义：function name / const|let|var name
+//	b) 是浏览器内置或关键字（白名单）
+//
+// 不做数据流分析（那是重新实现一个 JS 解析器），但足以拦住「搬代码漏函数」这类事故。
+func TestAppJSAllCalledFunctionsDefined(t *testing.T) {
+	src, err := os.ReadFile("app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(src)
+
+	// 去掉注释与字符串字面量，避免把注释里的 `foo(` 或字符串里的 `'a(b'` 当调用。
+	// 顺序敏感：先块注释、再行注释、最后字符串（与真实词法顺序一致）。
+	js = regexp.MustCompile(`(?s)/\*.*?\*/`).ReplaceAllString(js, "")
+	js = regexp.MustCompile(`//[^\n]*`).ReplaceAllString(js, "")
+	js = regexp.MustCompile(`(?s)'[^'\\\n]*(?:\\.[^'\\\n]*)*'`).ReplaceAllString(js, "''")
+	js = regexp.MustCompile("(?s)`[^`]*`").ReplaceAllString(js, "``")
+
+	// JS 关键字 / 运算符形态，不是函数调用。
+	keywords := map[string]bool{
+		"if": true, "for": true, "while": true, "switch": true, "catch": true,
+		"function": true, "return": true, "typeof": true, "new": true, "await": true,
+		"async": true, "delete": true, "void": true, "in": true, "of": true,
+	}
+
+	// 浏览器内置 / 语言内置：不在本文件定义，但必然可用。
+	builtins := map[string]bool{
+		"Number": true, "String": true, "Boolean": true, "Array": true, "Object": true,
+		"Math": true, "JSON": true, "Date": true, "Promise": true, "Map": true, "Set": true,
+		"RegExp": true, "Error": true, "TypeError": true, "RangeError": true,
+		"isNaN": true, "isFinite": true, "parseInt": true, "parseFloat": true,
+		"encodeURIComponent": true, "decodeURIComponent": true, "setTimeout": true,
+		"clearTimeout": true, "setInterval": true, "clearInterval": true,
+		"fetch": true, "requestAnimationFrame": true, "getComputedStyle": true,
+		"alert": true, "confirm": true, "prompt": true, "structuredClone": true,
+		// 标准 Web API / 常见回调参数（不是本文件定义的函数）
+		"FormData": true, "TextEncoder": true, "TextDecoder": true, "Blob": true,
+		"URLSearchParams": true, "URL": true, "matchMedia": true, "open": true,
+		"addEventListener": true, "removeEventListener": true,
+		// Promise 构造参数 / 回调形参：在定义处以参数形式出现，不在顶层定义
+		"resolve": true, "reject": true, "callback": true,
+	}
+
+	defined := map[string]bool{}
+	// 定义形态：function name，以及 const|let|var 声明里的**每一个**标识符
+	// （`let a = 1, b = 2` 可能一行声明多个；`let mdProbeOf = () => undefined` 是箭头函数形态，
+	// 旧正则只取声明列表里的第一个名字，把 mdProbeOf 误判成未定义）。
+	declRe := regexp.MustCompile(`(?:const|let|var)\s+([^;\n]+)`)
+	identRe := regexp.MustCompile(`([A-Za-z_$][\w$]*)\s*=`)
+	funcRe := regexp.MustCompile(`function\s+([A-Za-z_$][\w$]*)`)
+	for _, m := range funcRe.FindAllStringSubmatch(js, -1) {
+		defined[m[1]] = true
+	}
+	for _, m := range declRe.FindAllStringSubmatch(js, -1) {
+		for _, id := range identRe.FindAllStringSubmatch(m[1], -1) {
+			defined[id[1]] = true
+		}
+	}
+
+	// 收集所有调用：name( —— 排除方法调用 .name( 与属性访问
+	callRe := regexp.MustCompile(`(?:^|[^.\w$])([A-Za-z_$][\w$]*)\s*\(`)
+	missing := map[string]int{}
+	n := 0
+	for _, m := range callRe.FindAllStringSubmatch(js, -1) {
+		name := m[1]
+		n++
+		if keywords[name] || builtins[name] || defined[name] {
+			continue
+		}
+		missing[name]++
+	}
+	if n == 0 {
+		t.Fatal("没有从 app.js 里扫到任何函数调用，正则可能失效（去注释/字符串的逻辑误伤了）")
+	}
+	if len(missing) > 0 {
+		names := make([]string, 0, len(missing))
+		for k := range missing {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			t.Errorf("app.js 调用了 %s() 但本文件里没有定义（调用 %d 次）—— 典型成因：搬代码时漏搬底层工具函数；"+
+				"运行时会在调用点抛 ReferenceError，若被 try/catch 吞掉则表现为「页面空白但无报错」", name, missing[name])
+		}
 	}
 }

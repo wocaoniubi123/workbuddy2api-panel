@@ -20,9 +20,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
+	"github.com/misakano7545/workbuddy2api-panel/internal/cst"
+	"github.com/misakano7545/workbuddy2api-panel/internal/logfmt"
 )
 
 // ErrKind 错误分类，pool 据此决定冷却时长。
@@ -811,6 +811,10 @@ type Client struct {
 	// 面板保存配置热改 + chat 热路径并发读写，用 atomic.Bool 消除数据竞争。
 	SanitizeFingerprints atomic.Bool
 
+	// SanitizeBrandScope 身份类规则（品牌词）的作用域："all"（默认，所有消息角色，
+	// 与上游既有行为一致）或 "identity"（仅 system/developer；features.sanitize_brand_scope）。
+	SanitizeBrandScope atomic.Value // string
+
 	// UserAgent 出站 User-Agent 显式覆盖（非空时全路径生效，优先于默认三段式）。
 	// 空 = 默认官方形态：chat/refresh/FetchModels 走
 	// `WorkBuddy/<ver> WorkBuddy/<ver> CLI/<cliVer>`；billing 走 `WorkBuddy/<ver>`
@@ -882,6 +886,7 @@ func New() *Client {
 		GlobalEnabled: true,
 	}
 	c.SanitizeFingerprints.Store(true)
+	c.SanitizeBrandScope.Store("all")
 	return c
 }
 
@@ -965,6 +970,13 @@ func (c *Client) chatBase(a *auth.Auth) string {
 	return c.ChatBaseCN
 }
 
+// brandScopeGlobal 报告身份类规则是否对所有消息角色生效（默认 true）。
+// 只有显式配置 features.sanitize_brand_scope=identity 时返回 false。
+func (c *Client) brandScopeGlobal() bool {
+	s, _ := c.SanitizeBrandScope.Load().(string)
+	return s != "identity"
+}
+
 // prepareBody 组装出站请求体（脱敏开关由 Client.SanitizeFingerprints 控制）。
 // realm 为账号 Realm()（cn/global），供 efforts 缓存分桶（跨域 effort 集合不互相污染）。
 // 返回改写后的请求体、客户端原始请求档位与本次实际生效档位
@@ -981,7 +993,7 @@ func (c *Client) prepareBody(body []byte, realm, uid, conversationID string) ([]
 	// prompt_cache_key 注入（P0 费用优化，费用降 ~17×）：按账号隔离的稳定缓存键，
 	// 让同一客户端对同一账号的连续请求命中上游前缀缓存。与 body 归一化共用
 	// prepareBodyOpt 的同一次 map 解析，不再二次 Unmarshal/Marshal。
-	return prepareBodyOpt(body, c.SanitizeFingerprints.Load(), efforts, defs, maxOut, uid, conversationID, true)
+	return prepareBodyOpt(body, c.SanitizeFingerprints.Load(), c.brandScopeGlobal(), efforts, defs, maxOut, uid, conversationID, true)
 }
 
 // effortsSnapshot 返回 effort 能力缓存副本；nil 表示未知（透传不降级）。
@@ -1779,7 +1791,14 @@ type v3ModelPromotion struct {
 	Enabled  bool     `json:"enabled"`
 	Priority int      `json:"priority"`
 	ModelIDs []string `json:"modelIds"`
-	Badge    *struct {
+	// ID / Name / Tags：优惠数组里还夹着**纯模型定义**（无 kind/discount，只有
+	// id+name+tags）。实测 2026-10-22：global 的 hy-image-3.5 只出现在这里、
+	// data.models 里没有——只按 models 解析会得出「国际版没有出图模型」的假
+	// 结论（实际可调：200 + usage{output_image_tokens:15000, credit:0.27}）。
+	ID   string   `json:"id"`
+	Name string   `json:"name"`
+	Tags []string `json:"tags"`
+	Badge *struct {
 		Label string `json:"label"`
 	} `json:"badge"`
 	Discount *struct {
@@ -2191,6 +2210,22 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth, ua string) (map[string]Mode
 		mi.Credits = ""
 		mi.Tags = nil
 		out[id] = mi
+	}
+	// 优惠数组里内嵌的模型定义（只有 id/name/tags，没有 kind/discount）：上游把
+	// 部分出图模型只放这里（实测 2026-10-22 global 的 hy-image-3.5），data.models
+	// 里没有。补进目录后，stashGenerationModels 会把它按 image 留存并单列，
+	// nonChatModel 也会照旧把它挡在对话列表之外——不必另写一套过滤。
+	// 只补媒体生成类（tags 命中 text-to-image / image-to-image / video）：其它
+	// 形态没有实测样本，不猜。
+	for _, pr := range env.Data.ModelPromotions {
+		id := strings.TrimSpace(pr.ID)
+		if id == "" || generationKind(pr.Tags) == "" {
+			continue
+		}
+		if _, exists := out[id]; exists {
+			continue
+		}
+		out[id] = ModelInfo{ID: id, Name: pr.Name, Tags: pr.Tags}
 	}
 	// 挂当前生效的限时优惠（modelPromotions）：Credits 字段是**牌价**（转正后基准
 	// 倍率，如 hy4-preview-f 的 x0.29），而 WorkBuddy 客户端显示的是生效价（试用/

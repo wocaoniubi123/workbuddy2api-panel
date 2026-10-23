@@ -7,11 +7,11 @@ import (
 	"log"
 	"time"
 
-	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
+	"github.com/misakano7545/workbuddy2api-panel/internal/auth"
+	"github.com/misakano7545/workbuddy2api-panel/internal/cst"
+	"github.com/misakano7545/workbuddy2api-panel/internal/logfmt"
+	"github.com/misakano7545/workbuddy2api-panel/internal/session"
+	"github.com/misakano7545/workbuddy2api-panel/internal/upstream"
 )
 
 const (
@@ -53,7 +53,7 @@ func (s *Scheduler) RunTravelNow() {
 func (s *Scheduler) runTravel(ctx context.Context, spread bool) {
 	plan := s.spreadPlan(taskTravel, spread, cst.Now())
 	first := true
-	for _, st := range s.cfg.Pool.List() {
+	for _, st := range plan.order(s.cfg.Pool.List()) {
 		if st.Disabled {
 			continue
 		}

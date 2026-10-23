@@ -66,7 +66,8 @@
     "dump_max_bytes": 0
   },
   "features": {
-    "sanitize_blacklist_fingerprints": true
+    "sanitize_blacklist_fingerprints": true,
+    "sanitize_brand_scope": "all"
   },
   "models": {
     "_comment": "hidden: 不对外暴露的模型黑名单。裸名=两域都藏；\"cn:xxx\"/\"global:xxx\"=只藏该域。/v1/models 列表过滤 + chat 点名拒绝，面板保存后热生效。aliases: 模型映射（客户端名=真实名，如 \"my-glm=global:glm-5.2\"），被映射到的目标仍受 hidden 约束，同样热生效。",
@@ -99,7 +100,8 @@
     "cost_explore_interval": "30m",
     "credit_floor": 100,
     "credit_floor_max_rate": 0,
-    "reserve_credits": 10
+    "reserve_credits": 10,
+    "model_fallback": {}
   },
   "session_sticky": {
     "enabled": true,
