@@ -106,16 +106,17 @@ func TestUsageOverviewCacheHitKPI(t *testing.T) {
 	if !strings.Contains(stats, "90%") {
 		t.Fatalf("命中率 7200/8000 应显示 90%%:\n%s", stats)
 	}
-	if !strings.Contains(stats, "命中 7.2k · 未命中 800") {
+	// 本仓 fmtTok 是亿/万制（万以下原样、不加 k 缩写），7200 显示 "7200" 而非上游的 "7.2k"。
+	if !strings.Contains(stats, "命中 7200 · 未命中 800") {
 		t.Fatalf("副标题应回显命中/未命中 token:\n%s", stats)
 	}
-	// 位置：紧跟「总 token」、先于「prompt」卡（三张主指标同排）。
+	// 位置：紧跟「总 token」、先于「输入」卡（三张主指标同排；本仓标签是中文「输入/输出」）。
 	iReq := strings.Index(stats, ">请求数<")
 	iTotal := strings.Index(stats, ">总 token<")
 	iHit := strings.Index(stats, ">平均缓存命中率<")
-	iPrompt := strings.Index(stats, ">prompt<")
+	iPrompt := strings.Index(stats, ">输入<")
 	if !(iReq >= 0 && iReq < iTotal && iTotal < iHit && iHit < iPrompt) {
-		t.Fatalf("卡片顺序应为 请求数 → 总 token → 平均缓存命中率 → prompt:\n%s", stats)
+		t.Fatalf("卡片顺序应为 请求数 → 总 token → 平均缓存命中率 → 输入:\n%s", stats)
 	}
 
 	if !strings.Contains(out.EmptyStats, "无缓存观测样本") || !strings.Contains(out.EmptyStats, ">—<") {
