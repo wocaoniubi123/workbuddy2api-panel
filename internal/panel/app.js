@@ -492,17 +492,49 @@ function accSortForDisplay(list) {
     return (Number(y.credits) || 0) - (Number(x.credits) || 0);
   });
 }
+let accRealmFilter = 'all';
+let lastAccountsList = [];
 
 function renderAccounts(list) {
+  lastAccountsList = Array.isArray(list) ? list : [];
   const tb = $('accBody');
-  list = accSortForDisplay(list);
-  if (!list.length) {
-    setHTML(tb, '<tr><td colspan="9"><div class="empty"><div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号</div></td></tr>');
+  const total = lastAccountsList.length;
+  const globalCnt = lastAccountsList.filter(s => s.realm === 'global').length;
+  const cnCnt = total - globalCnt;
+
+  const elTabs = $('accRealmTabs');
+  if (elTabs) {
+    const cAll = $('accCntAll'), cCn = $('accCntCn'), cGl = $('accCntGlobal');
+    if (cAll) cAll.textContent = total;
+    if (cCn) cCn.textContent = cnCnt;
+    if (cGl) cGl.textContent = globalCnt;
+    elTabs.querySelectorAll('button[data-realm]').forEach(b => {
+      b.classList.toggle('on', b.dataset.realm === accRealmFilter);
+    });
+  }
+
+  let filtered = lastAccountsList;
+  if (accRealmFilter === 'cn') {
+    filtered = lastAccountsList.filter(s => s.realm !== 'global');
+  } else if (accRealmFilter === 'global') {
+    filtered = lastAccountsList.filter(s => s.realm === 'global');
+  }
+
+  if (!filtered.length) {
+    if (!total) {
+      setHTML(tb, '<tr><td colspan="9"><div class="empty"><div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号</div></td></tr>');
+    } else if (accRealmFilter === 'cn') {
+      setHTML(tb, '<tr><td colspan="9"><div class="empty"><div class="big">暂无国内版账号</div>当前账号池内均为国际版账号（共 ' + globalCnt + ' 个）</div></td></tr>');
+    } else if (accRealmFilter === 'global') {
+      setHTML(tb, '<tr><td colspan="9"><div class="empty"><div class="big">暂无国际版账号</div>当前账号池内均为国内版账号（共 ' + cnCnt + ' 个）</div></td></tr>');
+    }
     return;
   }
+  // 本仓既有：展示顺序按积分降序、禁用垫底（作用在域筛选之后，不改变筛选结果）。
+  filtered = accSortForDisplay(filtered);
   // 有总额度（credits_total）→ 进度条按自身 剩余/总额 百分比；旧数据无总额 → 退回池内最高=100%
-  const maxCred = Math.max(1, ...list.map(s => s.credits || 0));
-  setHTML(tb, list.map(s => {
+  const maxCred = Math.max(1, ...filtered.map(s => s.credits || 0));
+  setHTML(tb, filtered.map(s => {
     const bl = (new Date(s.breaker_until || 0) - Date.now()) / 1000;
     const dg = (new Date(s.degrade_until || 0) - Date.now()) / 1000;
     const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0, dg > 0 ? dg : 0);
@@ -567,9 +599,14 @@ function renderAccounts(list) {
     const latency = formatLatency(tu.last_latency_ms);
     const rate = formatRate(tu.last_tokens_per_second);
     const usageTitle = '最近一次：' + req + ' 次 / ' + totalTok + ' / 延迟 ' + latency + ' / ' + rate;
+    const rawWho = s.nickname || s.uid || '';
+    const nameHtml = remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>');
+    const tags = (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') +
+      (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') +
+      (s.api_key ? ' <span class="realm-tag">API Key</span>' : '');
     return '<tr class="' + cls + '" title="uid: ' + esc(s.uid) + '">' +
       '<td class="mark" aria-hidden="true"><i></i></td>' +
-      '<td class="who"><div class="nm">' + remarkName(s.uid, s.nickname ? esc(s.nickname) : '<span style="color:var(--ink-3)">未命名</span>') + (s.realm === 'global' ? ' <span class="realm-tag">国际版</span>' : '') + (s.enterprise ? ' <span class="realm-tag">企业版</span>' : '') + (s.api_key ? ' <span class="realm-tag">API Key</span>' : '') + '</div><div class="id">' + esc(short) + '</div></td>' +
+      '<td class="who"><div class="nm"><span class="nm-name" title="' + esc(rawWho) + '">' + nameHtml + '</span>' + tags + '</div><div class="id" title="uid: ' + esc(s.uid) + '">' + esc(short) + '</div></td>' +
       '<td>' + tag + note + rateLimits + '</td>' +
       '<td class="cred" title="' + esc(credTip) + '"><div class="n">' + cred + '</div><div class="bar"><i style="width:' + pct + '%"></i></div></td>' +
       '<td class="num">' + (s.success_count || 0) + ' <span style="color:var(--ink-3)">/</span> <span style="color:var(--bad)">' + (s.err_total || 0) + '</span></td>' +
@@ -585,7 +622,7 @@ function renderAccounts(list) {
         // 无个人成长体系的账号（企业版 / 静态 API Key）不渲染「签到」「任务」：前者
         // 上游 400「企业账号不支持该操作」，后者 403 growth-only；只留「额度」，点它走
         // /balance，额度由 upstream 的企业口径端点（get-enterprise-user-usage）填充。
-        // 七个动作按固定槽位输出，缺位留空 span —— CSS 用 grid 固定列宽，逐行对齐。
+        // 八个动作按固定槽位输出，缺位留空 span —— CSS 用 grid 固定列宽，逐行对齐。
         // 「探活」单独占一槽（仅封禁态渲染）：它与「解冻」是两个独立动作，若挤在同一
         // 槽里输出两个按钮，冻结行的列数就与其它行不同，整列又会错位。
         (personal ?
@@ -598,6 +635,7 @@ function renderAccounts(list) {
                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
                             : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (personal ? '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额' : '退出选号，但照常保活 / 刷新额度') + '">暂停选号</button>')),
         (s.disabled ? '' : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>'),
+        '<button class="xs ghost" data-a="remark" data-u="' + esc(s.uid) + '" title="给这个账号起个本机备注（只存浏览器）">备注</button>',
         '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>',
       ].map(html => html || '<span class="slot" aria-hidden="true"></span>').join('') +
       '</div></td></tr>';
@@ -776,6 +814,8 @@ $('accBody').addEventListener('click', async ev => {
   const b = ev.target.closest('button[data-a]');
   if (!b) return;
   const u = b.dataset.u, a = b.dataset.a;
+  // 行内「备注」只开本机编辑器，不打后端接口：提前返回，跳过下面的 disable 与 confirm。
+  if (a === 'remark') { openRemarks(u); return; }
   if (a === 'remove' && !confirm('移除账号将删除池状态与 auths/ 下的凭证文件，且不可恢复。确认移除？')) return;
   if (a === 'disable' && !confirm('禁用后该账号不再参与选号（保号任务默认也跳过），需手动解冻才能恢复。若只是想临时让位、仍要保号，请改用「暂停选号」。确认禁用？')) return;
   b.disabled = true;
@@ -844,6 +884,16 @@ $('btnActivityAll').onclick = async () => {
   try { await api('activity_all', { method: 'POST' }); toast('活跃上报已开始，结果见日志', 'ok'); }
   catch (e) { toast(e.message, 'err'); }
 };
+if ($('accRealmTabs')) {
+  $('accRealmTabs').addEventListener('click', ev => {
+    const btn = ev.target.closest('button[data-realm]');
+    if (!btn) return;
+    const r = btn.dataset.realm;
+    if (r === accRealmFilter) return;
+    accRealmFilter = r;
+    renderAccounts(lastAccountsList);
+  });
+}
 
 /* ── 模型 ─────────────────────────────────────────────────────────── */
 /* 实测上限标注：scripts/probe_max_tokens.py --panel-out 写入探测结果，
@@ -948,7 +998,7 @@ function imageRateCell(m) {
 
 async function loadModels(force) {
   const tb = $('mdBody');
-  tb.innerHTML = '<tr><td colspan="7"><div class="empty">正在向上游查询…</div></td></tr>';
+  tb.innerHTML = '<tr><td colspan="9"><div class="empty">正在向上游查询…</div></td></tr>';
   try {
     // 探测、模型锁与最近请求都是本地可选增强：任一失败不影响模型目录本身。
     // 可用性标签不额外发推理请求，只用模型锁和最近真实请求结果合成。
@@ -965,7 +1015,7 @@ async function loadModels(force) {
     mdLocks = Array.isArray(st.model_locks) ? st.model_locks : [];
     mdRecent = Array.isArray(rm.recent) ? rm.recent : [];
     if (!mdAll.length) {
-      tb.innerHTML = '<tr><td colspan="7"><div class="empty">上游未返回模型</div></td></tr>';
+      tb.innerHTML = '<tr><td colspan="9"><div class="empty">上游未返回模型</div></td></tr>';
       $('mdCount').textContent = '';
       $('mdNote').textContent = '上游未返回模型';
       return;
@@ -981,7 +1031,7 @@ async function loadModels(force) {
     renderModels();
   } catch (e) {
     mdAll = [];
-    tb.innerHTML = '<tr><td colspan="7"><div class="empty">' + esc(e.message) + '</div></td></tr>';
+    tb.innerHTML = '<tr><td colspan="9"><div class="empty">' + esc(e.message) + '</div></td></tr>';
     $('mdCount').textContent = '';
   }
 }
@@ -1120,7 +1170,7 @@ function mdRowHtml(m, pr) {
   // 出图模型没有思考档位（上游目录里它本就不带 reasoning 字段）：显示 —，不写"不支持思考"。
   const effs = m.image_generation ? '<span style="color:var(--ink-3)">—</span>'
     : eff.length ? eff.map(e => '<span class="tag warn">' + esc(e) + '</span>').join(' ')
-    : '<span style="color:var(--ink-3);font-size:12.5px">' + (m.supports_reasoning ? '固定档 · 默认 ' + esc(m.default_effort || '?') : '不支持思考') + '</span>';
+    : '<span style="color:var(--ink-3);font-size:12.5px">' + (m.supports_reasoning ? (m.default_effort ? '固定档 · 默认 ' + esc(m.default_effort) : '固定档 · 默认档上游未报') : '不支持思考') + '</span>';
   // 能力徽标：默认模型 / 工具调用 / 视觉 / 纯推理（上游目录全字段透出，缺失不显示）
   const caps = [];
   if (m.tier) caps.push('<span class="tag warn" title="上游付费层级（' + esc(m.tier) + '）：切换模型前留意，免费账号可能调不通或排队靠后">' + esc(m.tier) + '</span>');
@@ -1135,19 +1185,59 @@ function mdRowHtml(m, pr) {
   }
   const capHtml = caps.length ? '<div class="id" style="margin-top:2px">' + caps.join(' ') + '</div>' : '';
   const tip = m.description ? ' title="' + esc(m.description) + '"' : '';
-  return '<tr><td class="mark" aria-hidden="true"><i></i></td><td class="who"' + tip + '><div class="nm"><span class="mid">' + esc(m.id) + '</span>' + mdAvailabilityTag(m) + '</div><div class="id">' + esc(m.name || '') + '</div>' + capHtml + '</td>' +
-    '<td class="num">' + rateCell(m) + '</td>' +
+  // 网关档位：选项原样取该模型「支持的思考档位」（可关思考的模型再补 off），
+  // 不合成"最高档（x）"之类的文案；默认选中支持的最高档（缺省 default_effort=max
+  // 的语义）。上游固定档的模型（没有 supported_efforts）也给一个单选项，表示网关
+  // 只会跟随该档；出图模型与完全没有档位声明的模型仍渲染 —。
+  const EFFORT_RANK = { off: 0, minimal: 1, low: 2, medium: 3, high: 4, xhigh: 5, max: 6 };
+  const gwOpts = [];
+  for (const e of (m.supported_efforts || [])) {
+    const v = String(e).trim().toLowerCase();
+    if (v && !gwOpts.includes(v)) gwOpts.push(v);
+  }
+  const fixedTier = !gwOpts.length && m.supports_reasoning && m.default_effort
+    ? String(m.default_effort).trim().toLowerCase() : '';
+  if (fixedTier) gwOpts.push(fixedTier);
+  if (m.can_disable_thinking && gwOpts.length && !gwOpts.includes('off')) gwOpts.push('off');
+  const gwTop = gwOpts.filter(t => t !== 'off')
+    .sort((a, b) => (EFFORT_RANK[b] || 0) - (EFFORT_RANK[a] || 0))[0] || '';
+  const gwPicked = gwOpts.includes(m.gateway_effort) ? m.gateway_effort : gwTop;
+  let gw;
+  if (m.image_generation || !gwOpts.length) {
+    gw = '<td class="gw"><span style="color:var(--ink-3)">—</span></td>';
+  } else {
+    const gwFixed = !!fixedTier && !m.can_disable_thinking;
+    const gwDisabled = m.gateway_policy_enabled === false || gwFixed;
+    const gwTitle = m.gateway_policy_enabled === false
+      ? ' title="思考档位策略已关闭，网关不会注入档位；到「配置 → 思考档位」打开"'
+      : (gwFixed ? ' title="上游固定档，网关只需跟随，不可调"' : '');
+    gw = '<td class="gw"><select data-effort-id="' + esc(m.id) + '"' +
+      (gwDisabled ? ' disabled' : '') + gwTitle + '>' +
+      gwOpts.map(t => '<option value="' + esc(t) + '"' + (t === gwPicked ? ' selected' : '') + '>' + esc(t) + '</option>').join('') +
+      '</select></td>';
+  }
+  // 下游可见：关掉 = 进 models.hidden（/v1/models 不列、点名调用直接拒绝），
+  // 保存即热生效；行整体降透明并把开关留在原列，方便再打开。
+  const vis = '<td class="vis"><label title="' + (m.hidden
+      ? '当前不对下游暴露：客户端列表里看不到且点名调用会被拒绝；打开即恢复'
+      : '当前对下游暴露：关闭后 /v1/models 不再列出该模型，点名调用直接拒绝') + '">' +
+    '<input type="checkbox" data-model-id="' + esc(m.id) + '"' + (m.hidden ? '' : ' checked') + '>可见</label></td>';
+  return '<tr' + (m.hidden ? ' class="md-off"' : '') + '><td class="mark" aria-hidden="true"><i></i></td><td class="who"' + tip + '><div class="nm"><span class="mid">' + esc(m.id) + '</span>' + mdAvailabilityTag(m) + '</div><div class="id">' + esc(m.name || '') + '</div>' + capHtml + '</td>' +
+    '<td class="num">' + rateCell(m) + '</td>' + gw +
     '<td>' + (m.default_effort && !m.image_generation ? '<span class="tag ok">' + esc(m.default_effort) + '</span>' : '<span style="color:var(--ink-3)">—</span>') + '</td>' +
     '<td class="efs" style="white-space:normal">' + effs + '</td>' +
     '<td class="num">' + (m.context_length ? Math.round(m.context_length / 1000) + 'K' : '—') + '</td>' +
-    outCell(m, pr) + '</tr>';
+    outCell(m, pr) + vis + '</tr>';
 }
 
 function renderModels() {
   const tb = $('mdBody');
-  const list = mdSortList(mdAll.filter(m => mdMatch(m)));
+  const sorted = mdSortList(mdAll.filter(m => mdMatch(m)));
+  // 下游已隐藏的模型统一排到末尾（各自保持当前排序规则内的相对顺序）；重新打开
+  // 即回到排序规则给出的原位置——不额外记忆旧下标，避免两套顺序互相漂移。
+  const list = sorted.filter(m => !m.hidden).concat(sorted.filter(m => m.hidden));
   if (!list.length) {
-    tb.innerHTML = '<tr><td colspan="7"><div class="empty">没有符合当前筛选条件的模型</div></td></tr>';
+    tb.innerHTML = '<tr><td colspan="9"><div class="empty">没有符合当前筛选条件的模型</div></td></tr>';
   } else {
     tb.innerHTML = list.map(m => mdRowHtml(m, mdProbeOf(m.id))).join('');
   }
@@ -1156,6 +1246,45 @@ function renderModels() {
     : filtered ? '命中 ' + list.length + ' / ' + mdAll.length + ' 个模型'
     : mdAll.length + ' 个模型';
   $('mdCount').className = filtered ? 'note src-off' : 'note';
+}
+
+// 行内「下游可见」开关：POST 写 models.hidden（保存即热生效），成功后本地更新
+// 并重排——隐藏行落到末尾，重新打开回到排序规则给出的原位置。失败回滚勾选态。
+// 行内「网关档位」下拉同表：POST 写 thinking.model_defaults 的精确键。
+$('mdBody').addEventListener('change', async ev => {
+  const sel = ev.target.closest('select[data-effort-id]');
+  if (sel) return saveGatewayEffort(sel);
+  const cb = ev.target.closest('input[data-model-id]');
+  if (!cb) return;
+  const id = cb.dataset.modelId, hidden = !cb.checked;
+  cb.disabled = true;
+  try {
+    await api('model_hidden', { method: 'POST', body: JSON.stringify({ id, hidden }) });
+    const m = mdAll.find(x => x.id === id);
+    if (m) m.hidden = hidden;
+    renderModels();
+    toast((hidden ? '已隐藏 ' : '已恢复 ') + id + (hidden ? '（下游不可见）' : '（下游可见）'), 'ok');
+  } catch (e) {
+    cb.checked = !cb.checked;
+    toast('切换失败：' + e.message, 'err');
+  } finally { cb.disabled = false; }
+});
+
+// saveGatewayEffort 行内「网关档位」：选项即模型支持的档位（含 off），选中即写
+// thinking.model_defaults 的「域:模型」精确键并热生效；失败直接重渲染回滚到
+// 服务端实际值（比手工还原选中的 option 可靠）。
+async function saveGatewayEffort(sel) {
+  const id = sel.dataset.effortId, effort = sel.value;
+  sel.disabled = true;
+  try {
+    await api('model_effort', { method: 'POST', body: JSON.stringify({ id, effort }) });
+    const m = mdAll.find(x => x.id === id);
+    if (m) m.gateway_effort = effort;
+    toast('已设置 ' + id + ' 的网关档位 = ' + effort, 'ok');
+  } catch (e) {
+    toast('设置失败：' + e.message, 'err');
+    renderModels();
+  } finally { sel.disabled = false; }
 }
 
 function resetModelFilter() {
@@ -1577,6 +1706,7 @@ const CFG_MAP = {
   models_hidden: ['models', 'hidden'],
   models_allowed: ['models', 'allowed'],
   models_aliases: ['models', 'aliases'],
+  thinking_enabled: ['thinking', 'enabled'],
 };
 /* 「覆盖型」文本字段：空串本身是有意义的取值（= 回落到内置默认），必须照发。
  *
@@ -1613,14 +1743,31 @@ async function loadConfig() {
       const v = dig(cfgLoaded, path);
       if (el.type === 'checkbox') el.checked = !!v;
       else if (Array.isArray(v)) el.value = v.join(', ');
+      // 按模型覆盖档位（对象）：回显成「模型=档位」多行文本，与 textarea 输入同形。
+      else if (v && typeof v === 'object') el.value = Object.entries(v).map(([k, x]) => k + '=' + x).join('\n');
       else el.value = v == null ? '' : v;
     }
     markDurationFields(); // 回填后重置校验态（清掉残留红框；现值来自后端必然合法）
+    // 思考档位策略是「三选一单选组」（客户端优先 / 网关优先·只档位 / 网关优先·档位+开关），
+    // 由两个既有配置键（client_priority + override_scope）推导，格式不变、手改配置仍生效。
+    // 无 iterable NodeList 的 DOM 桩（故障注入/老测试）下静默跳过：只影响回显，不影响保存。
+    const mode = thinkingModeOf(cfgLoaded.thinking);
+    try {
+      for (const r of f.querySelectorAll('input[name="thinking_mode"]')) r.checked = r.value === mode;
+    } catch (e) { /* DOM 桩没有 NodeList 迭代器 */ }
     $('cfgKey').disabled = !!d.api_key_env_managed;
     $('cfgKey').title = d.api_key_env_managed ? '访问密钥由启动环境变量设置，请在部署配置中修改。' : '';
     $('cfgNote').textContent = managed.length ? '由启动环境管理：' + managed.join('、') : '';
   } catch (e) { toast('读取配置失败：' + e.message, 'err'); }
 }
+// thinkingModeOf 由 thinking.client_priority + override_scope 推导三选一的选中项。
+// 缺省（未写客户端优先）= 客户端优先，与 config 默认值一致。
+function thinkingModeOf(t) {
+  t = t || {};
+  if (t.client_priority !== false) return 'client';
+  return String(t.override_scope || '').toLowerCase() === 'all' ? 'all' : 'level';
+}
+
 function collectConfig() {
   const f = $('cfgForm'), out = {};
   for (const [name, path] of Object.entries(CFG_MAP)) {
@@ -1643,6 +1790,12 @@ function collectConfig() {
     }
     if (v !== undefined) put(out, path, v);
   }
+  // 三选一单选组 → 两个既有键（与 CFG_MAP 互不覆盖：上面只回填了 thinking.enabled）。
+  // 老测试桩没有 querySelector（只铺 elements），缺省按客户端优先回填。
+  const modeEl = typeof f.querySelector === 'function' ? f.querySelector('input[name="thinking_mode"]:checked') : null;
+  const mode = modeEl ? modeEl.value : 'client';
+  put(out, ['thinking', 'client_priority'], mode === 'client');
+  put(out, ['thinking', 'override_scope'], mode === 'all' ? 'all' : 'level');
   return out;
 }
 /* Go 时长字段即时校验：空 = 沿用现值（collectConfig 跳过发送）；非空必须是
@@ -2734,9 +2887,16 @@ function renderUsage(d) {
   // 九张卡（消耗积分 + 「使用状态」+ 请求数 + 总 token + 平均缓存命中率 + 输入/输出
   // + 失败尝试 + 平均延迟）：主指标用强调色，completion 用成功色（与图表里的绿柱呼应），
   // 失败/延迟只在有值时上语义色。
+  // 上游本轮新增的「总积分」卡与本仓「消耗积分」卡取的是同一字段（t.credits），
+  // 属同源重复；本仓保留信息量更大的「消耗积分 · 均 N/1M tokens」并把上游的
+  // 「N 条样本」口径并进副标题，故不单列「总积分」。
   const chTok = Number(t.cache_hit_tokens || 0), cmTok = Number(t.cache_miss_tokens || 0);
+  const creditSamples = Number(t.credit_samples || 0);
   $('usStats').innerHTML =
-    usKpi(fmtNum(t.credits), '消耗积分 · 均 ' + fmtCreditRatio(t.credits_per_1m_tokens, t.credit_samples, t.credit_tokens), 'c-credit') +
+    // 积分：无样本时值显示「—」而不是伪造 0（没观测到 ≠ 没消耗），沿用上游 5367e78 语义。
+    usKpi(creditSamples ? fmtNum(t.credits) : '—',
+      '消耗积分 · 均 ' + fmtCreditRatio(t.credits_per_1m_tokens, t.credit_samples, t.credit_tokens),
+      'c-credit', creditSamples ? creditSamples + ' 条积分样本' : '无积分样本') +
     '<div class="kpi"><div class="v" id="usLive">—</div></div>' +
     usKpi(fmtNum(reqs), '请求数', 'c-accent',
       errs ? '其中失败 ' + errs + ' 次' : '全部成功') +
@@ -4217,25 +4377,33 @@ function remarkFormRows() {
   }
   return rows;
 }
-function renderRemarkBody() {
+/* onlyUID 非空时只渲染该账号一行（账号池行内「备注」按钮走这条），避免为改一个号
+   在几十行里翻找。 */
+function renderRemarkBody(onlyUID) {
   const box = $('remarkBody');
   if (!box) return;
-  const rows = remarkFormRows();
+  let rows = remarkFormRows();
+  if (onlyUID) {
+    const k = remarkKey(onlyUID);
+    rows = rows.filter(r => r.uid === k);
+  }
   box.innerHTML = rows.length
     ? rows.map(r => '<div class="rm-row"><span class="rm-who" title="' + esc(r.who) + '">' + esc(r.who) + '</span>' +
         '<input type="text" data-uid="' + esc(r.uid) + '" value="' + esc(remarksAll()[r.uid] || '') + '" placeholder="备注（留空即清除）" maxlength="24"></div>').join('')
     : '<div class="empty">暂无账号：先在「账号池」加载一次账号列表。</div>';
 }
-function openRemarks() {
-  renderRemarkBody();
+function openRemarks(onlyUID) {
+  renderRemarkBody(typeof onlyUID === 'string' ? onlyUID : '');
   if ($('remarkVeil')) $('remarkVeil').classList.add('on');
 }
 function closeRemarks() { if ($('remarkVeil')) $('remarkVeil').classList.remove('on'); }
 function saveRemarkForm() {
-  const map = {};
+  // 在现有映射上合并：单账号编辑器里只有一行，整体替换会把其它号的备注全清掉。
+  const map = Object.assign({}, remarksAll());
   document.querySelectorAll('#remarkBody input[data-uid]').forEach(inp => {
-    const v = inp.value.trim();
-    if (v) map[inp.getAttribute('data-uid')] = v;
+    const k = inp.getAttribute('data-uid'), v = inp.value.trim();
+    if (v) map[k] = v;
+    else delete map[k];
   });
   const saved = storeRemarks(map);
   closeRemarks();
@@ -4244,7 +4412,7 @@ function saveRemarkForm() {
   else if (view === 'usage' && usageData) renderUsage(usageData);
   toast(saved ? '备注已保存（仅本机浏览器）' : '备注未能写入浏览器存储（隐私模式或空间已满），刷新后会丢失', saved ? '' : 'err');
 }
-if ($('btnRemarks')) $('btnRemarks').onclick = openRemarks;
+if ($('btnRemarks')) $('btnRemarks').onclick = () => openRemarks('');
 if ($('btnRemarkClose')) $('btnRemarkClose').onclick = closeRemarks;
 if ($('btnRemarkClear')) $('btnRemarkClear').onclick = () => {
   if (!storeRemarks({})) toast('清空未能写入浏览器存储，刷新后备注会回来', 'err');

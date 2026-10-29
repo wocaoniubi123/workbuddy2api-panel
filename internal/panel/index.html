@@ -258,14 +258,30 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
 /* 模型表：紧凑一些，7 列在常见窗口下尽量免横向滚动 */
 .acc.md { min-width: 700px; }
 .acc.md th, .acc.md td { padding: 10px 9px; }
-.who { min-width: 118px; max-width: 200px; }
+/* 下游可见开关列：窄列 + 弱化说明；被隐藏的行整体降透明度（仍可点回） */
+.acc.md td.vis { width: 1px; white-space: nowrap; }
+.acc.md td.vis label { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-3); cursor: pointer; }
+.acc.md tbody tr.md-off td { opacity: .52; }
+.acc.md tbody tr.md-off td.vis { opacity: 1; }
+/* 行内「网关档位」下拉：贴着表格，按行宽自适应，禁用态（策略关闭）灰显 */
+.acc.md td.gw select { width: 100%; min-width: 96px; padding: 3px 6px; font-size: 12.5px; }
+.acc.md td.gw select:disabled { color: var(--ink-3); background: transparent; }
+/* 思考档位策略：三选一单选组（客户端优先 / 网关优先·只档位 / 网关优先·档位+开关） */
+.radios { display: flex; flex-direction: column; gap: 2px; }
+.radios label { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; font-size: 13px; line-height: 1.5; cursor: pointer; }
+/* .radios label 里的单选框必须收成控件自身宽度：面板全局给 form input 设了
+   100% 宽 + block，直接套到 radio 上会把整行文字挤成竖排（label 高 200~400px）。 */
+.radios input { margin-top: 3px; flex: none; width: auto; display: inline-block; }
+.who { min-width: 130px; max-width: 240px; }
 #taskTable .who { max-width: 360px; }
 #taskTable .who .nm, #taskTable .who .id { white-space: normal; word-break: break-all; }
-.who .nm { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who .nm { display: flex; align-items: center; gap: 5px; min-width: 0; font-weight: 550; }
+.who .nm .nm-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who .nm .realm-tag { flex: none; margin-left: 0; }
 .who .id { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acc.md .who .nm { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .acc.md .who .nm .mid { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.realm-tag { display: inline-block; margin-left: 6px; padding: 1px 5px; border-radius: 4px; font: 500 10px/1 var(--sans); color: var(--accent); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); vertical-align: 1px; }
+.realm-tag { display: inline-block; padding: 1px 5px; border-radius: 4px; font: 500 10px/1.1 var(--sans); color: var(--accent); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent); white-space: nowrap; vertical-align: middle; }
 .realm-row { display: flex; align-items: center; gap: 14px; padding: 4px 0 10px; }
 .realm-opt { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
 .realm-opt input { accent-color: var(--accent); margin: 0; }
@@ -320,11 +336,11 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
    导致 vertical-align:middle 失效（按钮整体偏上、行线不齐）。这里强制恢复
    table-cell，让该列和其他列一样参与行高与垂直居中；按钮排列交给内层 .acts-inner。 */
 td.acts { display: table-cell; vertical-align: middle; text-align: right; }
-/* 账号池操作列：每个动作占固定槽位（签到 / 余额 / 任务 / 选号 / 禁用 / 移除），
+/* 账号池操作列：每个动作占固定槽位（签到 / 余额 / 任务 / 探活 / 选号 / 禁用 / 备注 / 移除），
    缺哪个留空槽。否则「解冻 / 暂停选号 / 恢复选号」互斥会改变按钮个数，整列左右错位。
    分列放在内层 div：td 保持 table-cell，vertical-align:middle 才继续生效
    （直接给 td 设 display:grid 会退出表格布局，按钮变顶对齐）。 */
-.acts-inner { display: grid; grid-template-columns: repeat(4, 54px) 68px repeat(2, 54px); gap: 5px; justify-content: end; align-items: center; }
+.acts-inner { display: grid; grid-template-columns: repeat(4, 54px) 68px repeat(3, 54px); gap: 5px; justify-content: end; align-items: center; }
 /* 统一盒模型：primary 与 ghost 的边框/行高不同会让「解冻」行比「暂停选号」行高 2~3px，
    行线因此参差。固定高度 + border-box 后每行等高、按钮底边对齐。 */
 .acts-inner button { width: 100%; height: 26px; box-sizing: border-box; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
@@ -484,14 +500,14 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .kpis.k4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   @media (max-width: 1180px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
   @media (max-width: 700px) { .kpis, .kpis.k4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-  /* k7：用量总览九张卡（消耗积分 + 使用状态 + 请求数 + 总 token + 平均缓存命中率
+  /* k8：用量总览九张卡（消耗积分 + 使用状态 + 请求数 + 总 token + 平均缓存命中率
      + 输入/输出 + 失败尝试 + 平均延迟，见 app.js renderUsage）。宽屏一行放下；
-     中屏折 5 列；窄屏与基础栅格一样 2 列。 */
-  .kpis.k7 { grid-template-columns: repeat(9, minmax(0, 1fr)); }
+     中屏折 5 列；窄屏与基础栅格一样 2 列。类名沿用上游 k8，列数按本仓实际卡数。 */
+  .kpis.k8 { grid-template-columns: repeat(9, minmax(0, 1fr)); }
   @media (max-width: 1180px) {
-    .kpis.k7 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .kpis.k8 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   }
-  @media (max-width: 700px) { .kpis, .kpis.k4, .kpis.k7 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 700px) { .kpis, .kpis.k4, .kpis.k8 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
   .kpi {
     position: relative; min-width: 0; overflow: hidden;
     background: var(--surface-2); border: 1px solid var(--line-soft);
@@ -914,6 +930,11 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <div class="box">
         <header>
           <h3>账号池</h3>
+          <span class="vtabs" id="accRealmTabs">
+            <button type="button" data-realm="all" class="on">全部<span class="cnt" id="accCntAll">0</span></button>
+            <button type="button" data-realm="cn">国内版<span class="cnt" id="accCntCn">0</span></button>
+            <button type="button" data-realm="global">国际版<span class="cnt" id="accCntGlobal">0</span></button>
+          </span>
           <span class="grow"></span>
           <span class="note" id="accNote"></span>
           <button class="xs" id="btnRemarks">备注</button>
@@ -1042,7 +1063,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </div>
         <div class="tbl-wrap">
         <table class="acc md">
-          <thead><tr><th class="mark" aria-hidden="true"></th><th>模型</th><th>积分倍率</th><th>默认档</th><th>支持的思考档位</th><th>上下文长度</th><th>最大输出</th></tr></thead>
+          <thead><tr><th class="mark" aria-hidden="true"></th><th>模型</th><th>积分倍率</th><th>网关档位</th><th>上游默认</th><th>支持的思考档位</th><th>上下文长度</th><th>最大输出</th><th>下游可见</th></tr></thead>
           <tbody id="mdBody"></tbody>
         </table>
         </div>
@@ -1154,7 +1175,7 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <span class="trange" id="usRange"></span>
           <button class="xs" id="btnUsage">刷新</button>
         </header>
-        <div class="kpis k7" id="usStats"></div>
+        <div class="kpis k8" id="usStats"></div>
         <div class="pad">
           <div class="uschart">
             <div class="uschart-hd">
@@ -1508,6 +1529,24 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
             <div class="switch"><span class="lb">会话粘性路由</span>
               <input type="checkbox" name="session_sticky_enabled"></div>
             <div class="hint" style="margin-top:10px">Upstash Redis 镜像、凭证目录与状态文件路径需手工编辑配置文件（判为重启项）。</div>
+          </div>
+        </div>
+
+        <div class="box">
+          <header><h3>思考档位</h3></header>
+          <div class="pad">
+            <div class="switch"><span class="lb">启用思考档位策略</span>
+              <input type="checkbox" name="thinking_enabled"></div>
+            <label class="fld"><span class="lb">网关优先 / 客户端优先</span>
+              <div class="radios">
+                <label><input type="radio" name="thinking_mode" value="client">
+                  客户端优先：客户端没传档位时才补「网关档位」</label>
+                <label><input type="radio" name="thinking_mode" value="level">
+                  网关优先 · 只覆盖档位：客户端传的档位一律改写为「网关档位」，但尊重客户端「关闭思考」</label>
+                <label><input type="radio" name="thinking_mode" value="all">
+                  网关优先 · 档位与开关一起覆盖：连客户端「关闭思考」也改写成开启 + 「网关档位」</label>
+              </div>
+              <span class="hint">目标档位在「模型与档位」页每行的「网关档位」下拉里选：选项即该模型「支持的思考档位」原样（可关思考的模型另有 off），默认选中最高档；客户端没传档位时网关用它补，模型不支持所选档时落到不高于它的最高支持档</span></label>
           </div>
         </div>
 

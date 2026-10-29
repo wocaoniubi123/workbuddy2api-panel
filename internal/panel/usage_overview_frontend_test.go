@@ -46,6 +46,7 @@ const run = (key, fn) => { try { fn(); out[key] = true; } catch (e) { out[key] =
 run('sampleOk', () => ctx.renderUsage({ totals: {
   requests: 10, errors: 1, prompt_tokens: 9000, completion_tokens: 1000, total_tokens: 10000,
   avg_latency_ms: 1200, avg_tokens_per_second: 42.5,
+  credits: 1.23, credit_samples: 3,
   cache_hit_tokens: 7200, cache_miss_tokens: 800 }, buckets: 3 }));
 out.sampleStats = els.usStats.innerHTML;
 
@@ -110,7 +111,12 @@ func TestUsageOverviewCacheHitKPI(t *testing.T) {
 	if !strings.Contains(stats, "命中 7200 · 未命中 800") {
 		t.Fatalf("副标题应回显命中/未命中 token:\n%s", stats)
 	}
-	// 位置：紧跟「总 token」、先于「输入」卡（三张主指标同排；本仓标签是中文「输入/输出」）。
+	// 积分与样本数：上游本轮新增「总积分」独立卡，但本仓把它并入「消耗积分」卡的副标题
+	// （两者取的是同一字段 t.credits，见 app.js renderUsage 注释），故这里断言副标题。
+	if !strings.Contains(stats, "消耗积分") || !strings.Contains(stats, "3 条积分样本") {
+		t.Fatalf("消耗积分卡应回显 usage.credit 样本数:\n%s", stats)
+	}
+	// 位置：请求数 → 总 token → 平均缓存命中率 → 输入（主指标同排；本仓标签是中文输入/输出）。
 	iReq := strings.Index(stats, ">请求数<")
 	iTotal := strings.Index(stats, ">总 token<")
 	iHit := strings.Index(stats, ">平均缓存命中率<")
@@ -119,6 +125,10 @@ func TestUsageOverviewCacheHitKPI(t *testing.T) {
 		t.Fatalf("卡片顺序应为 请求数 → 总 token → 平均缓存命中率 → 输入:\n%s", stats)
 	}
 
+	// 无样本时不伪造 0：本仓把上游的「总积分」并进「消耗积分」卡，副标题口径写「无积分样本」。
+	if !strings.Contains(out.EmptyStats, "无积分样本") {
+		t.Fatalf("无积分样本时应提示「无积分样本」而不是伪造 0:\n%s", out.EmptyStats)
+	}
 	if !strings.Contains(out.EmptyStats, "无缓存观测样本") || !strings.Contains(out.EmptyStats, ">—<") {
 		t.Fatalf("无样本时应显示占位 — 与「无缓存观测样本」:\n%s", out.EmptyStats)
 	}
@@ -128,22 +138,22 @@ func TestUsageOverviewCacheHitKPI(t *testing.T) {
 	}
 }
 
-// TestUsageOverviewK7Grid 钉住 index.html：usStats 用 k7 栅格（一行放下全部总览卡）。
-// 上游原本是 7 张卡（k7 = 七列）；本 fork 额外有「消耗积分」「使用状态」两张，
-// 加上上游的七张共 9 张，故栅格为九列，类名沿用上游的 k7 不变。
-func TestUsageOverviewK7Grid(t *testing.T) {
+// TestUsageOverviewK8Grid 钉住 index.html：usStats 用 k8 栅格（一行放下全部总览卡）。
+// 上游是 8 张卡（k8 = 八列）；本 fork 额外有「消耗积分」「使用状态」两张、并把上游的
+// 「总积分」并入消耗积分卡，实际共 9 张，故栅格为九列，类名沿用上游的 k8 不变。
+func TestUsageOverviewK8Grid(t *testing.T) {
 	raw, err := os.ReadFile("index.html")
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(raw)
-	if !strings.Contains(html, `class="kpis k7" id="usStats"`) {
-		t.Fatal("usStats 容器应使用 kpis k7 栅格")
+	if !strings.Contains(html, `class="kpis k8" id="usStats"`) {
+		t.Fatal("usStats 容器应使用 kpis k8 栅格")
 	}
-	if !strings.Contains(html, ".kpis.k7 { grid-template-columns: repeat(9") {
-		t.Fatal("缺少 .kpis.k7 九列栅格规则（fork 总览共 9 张卡）")
+	if !strings.Contains(html, ".kpis.k8 { grid-template-columns: repeat(9") {
+		t.Fatal("缺少 .kpis.k8 九列栅格规则（fork 总览共 9 张卡）")
 	}
-	if !strings.Contains(html, "@media (max-width: 700px) { .kpis, .kpis.k4, .kpis.k7 {") {
-		t.Fatal("窄屏断点应把 k7 一并折成 2 列")
+	if !strings.Contains(html, "@media (max-width: 700px) { .kpis, .kpis.k4, .kpis.k8 {") {
+		t.Fatal("窄屏断点应把 k8 一并折成 2 列")
 	}
 }
